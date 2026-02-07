@@ -17,6 +17,7 @@ export function createEventDispatcher(
   config: Config,
   logger: Logger,
   onMessage: MessageHandler,
+  botOpenId?: string,
 ): lark.EventDispatcher {
   const dispatcher = new lark.EventDispatcher({});
 
@@ -57,6 +58,16 @@ export function createEventDispatcher(
           if (!mentions || mentions.length === 0) {
             logger.debug('Ignoring group message without @mention');
             return;
+          }
+          // If we know the bot's open_id, check that the bot is specifically mentioned
+          if (botOpenId) {
+            const botMentioned = mentions.some(
+              (m: any) => m.id?.open_id === botOpenId,
+            );
+            if (!botMentioned) {
+              logger.debug('Ignoring group message that does not @mention the bot');
+              return;
+            }
           }
         }
 

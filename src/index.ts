@@ -18,6 +18,20 @@ async function main() {
     disableTokenCache: false,
   });
 
+  // Fetch bot info to get bot's open_id for accurate @mention detection
+  let botOpenId: string | undefined;
+  try {
+    const botInfo: any = await client.request({ method: 'GET', url: '/open-apis/bot/v3/info' });
+    botOpenId = botInfo?.bot?.open_id;
+    if (botOpenId) {
+      logger.info({ botOpenId }, 'Bot info fetched');
+    } else {
+      logger.warn('Could not get bot open_id, group @mention filtering may be less accurate');
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Failed to fetch bot info, group @mention filtering may be less accurate');
+  }
+
   // Create sender and bridge
   const sender = new MessageSender(client, logger);
   const bridge = new MessageBridge(config, logger, sender);
@@ -27,7 +41,7 @@ async function main() {
     bridge.handleMessage(msg).catch((err) => {
       logger.error({ err, msg }, 'Unhandled error in message bridge');
     });
-  });
+  }, botOpenId);
 
   // Create WebSocket client
   const wsClient = new lark.WSClient({
