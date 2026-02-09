@@ -30,8 +30,8 @@ export function createEventDispatcher(
 
         const msgType = message.message_type;
 
-        // Only handle text and image messages
-        if (msgType !== 'text' && msgType !== 'image') {
+        // Only handle text, post (rich text), and image messages
+        if (msgType !== 'text' && msgType !== 'post' && msgType !== 'image') {
           logger.debug({ type: msgType }, 'Ignoring unsupported message type');
           return;
         }
@@ -89,6 +89,15 @@ export function createEventDispatcher(
           }
           text = '请分析这张图片';
           logger.info({ userId, chatId, chatType, imageKey }, 'Received image message');
+        } else if (msgType === 'post') {
+          // Rich text (post) message: extract plain text from nested structure
+          try {
+            const content = JSON.parse(message.content);
+            text = extractTextFromPost(content);
+          } catch {
+            logger.warn({ content: message.content }, 'Failed to parse post message content');
+            return;
+          }
         } else {
           // Text message: extract and clean text
           try {
@@ -98,7 +107,10 @@ export function createEventDispatcher(
             logger.warn({ content: message.content }, 'Failed to parse message content');
             return;
           }
+        }
 
+        // Common text cleanup for text and post messages
+        if (msgType === 'text' || msgType === 'post') {
           // Strip @mention tags (format: @_user_xxx or similar)
           text = text.replace(/@_\w+\s*/g, '').trim();
 
@@ -121,6 +133,48 @@ export function createEventDispatcher(
   });
 
   return dispatcher;
+}
+
+/**
+ * Extract plain text from Feishu post (rich text) message content.
+ * Post format: { "zh_cn": { "title": "...", "content": [[{tag, text, ...}, ...], ...] } }
+ * Each paragraph is an array of inline elements; text/a tags carry the text.
+ */
+function extractTextFromPost(content: Record<string, unknown>): string {
+  const parts: string[] = [];
+
+  // Post content is keyed by locale (zh_cn, en_us, etc.)
+  for (const locale of Object.values(content)) {
+    if (!locale || typeof locale !== 'object') continue;
+    const loc = locale as Record<string, unknown>;
+
+    if (loc.title && typeof loc.title === 'string') {
+      parts.push(loc.title);
+    }
+
+    const paragraphs = loc.content;
+    if (!Array.isArray(paragraphs)) continue;
+
+    for (const paragraph of paragraphs) {
+      if (!Array.isArray(paragraph)) continue;
+      const line: string[] = [];
+      for (const element of paragraph) {
+        if (!element || typeof element !== 'object') continue;
+        const el = element as Record<string, unknown>;
+        if ((el.tag === 'text' || el.tag === 'a') && typeof el.text === 'string') {
+          line.push(el.text);
+        }
+      }
+      if (line.length > 0) {
+        parts.push(line.join(''));
+      }
+    }
+
+    // Only use the first locale found
+    if (parts.length > 0) break;
+  }
+
+  return parts.join('\n');
 }
 
 function isAuthorized(config: Config, userId: string, chatId: string): boolean {
