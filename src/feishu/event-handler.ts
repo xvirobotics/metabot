@@ -93,7 +93,9 @@ export function createEventDispatcher(
           // Rich text (post) message: extract plain text from nested structure
           try {
             const content = JSON.parse(message.content);
+            logger.debug({ postContent: JSON.stringify(content).slice(0, 500) }, 'Raw post content');
             text = extractTextFromPost(content);
+            logger.debug({ extractedText: text.slice(0, 200) }, 'Extracted post text');
           } catch {
             logger.warn({ content: message.content }, 'Failed to parse post message content');
             return;
@@ -137,24 +139,37 @@ export function createEventDispatcher(
 
 /**
  * Extract plain text from Feishu post (rich text) message content.
- * Post format: { "zh_cn": { "title": "...", "content": [[{tag, text, ...}, ...], ...] } }
- * Each paragraph is an array of inline elements; text/a tags carry the text.
+ * Handles two formats:
+ *   With locale wrapper: { "zh_cn": { "title": "...", "content": [[{tag, text}, ...], ...] } }
+ *   Without locale wrapper: { "title": "...", "content": [[{tag, text}, ...], ...] }
  */
 function extractTextFromPost(content: Record<string, unknown>): string {
-  const parts: string[] = [];
+  // Try to find the post body — either the content itself or nested under a locale key
+  const bodies: Array<Record<string, unknown>> = [];
 
-  // Post content is keyed by locale (zh_cn, en_us, etc.)
-  for (const locale of Object.values(content)) {
-    if (!locale || typeof locale !== 'object') continue;
-    const loc = locale as Record<string, unknown>;
+  if (Array.isArray(content.content)) {
+    // Direct format (no locale wrapper)
+    bodies.push(content);
+  } else {
+    // Locale-wrapped format: values are { title, content }
+    for (const locale of Object.values(content)) {
+      if (locale && typeof locale === 'object' && !Array.isArray(locale)) {
+        const loc = locale as Record<string, unknown>;
+        if (Array.isArray(loc.content)) {
+          bodies.push(loc);
+        }
+      }
+    }
+  }
 
-    if (loc.title && typeof loc.title === 'string') {
-      parts.push(loc.title);
+  for (const body of bodies) {
+    const parts: string[] = [];
+
+    if (body.title && typeof body.title === 'string') {
+      parts.push(body.title);
     }
 
-    const paragraphs = loc.content;
-    if (!Array.isArray(paragraphs)) continue;
-
+    const paragraphs = body.content as unknown[][];
     for (const paragraph of paragraphs) {
       if (!Array.isArray(paragraph)) continue;
       const line: string[] = [];
@@ -170,11 +185,12 @@ function extractTextFromPost(content: Record<string, unknown>): string {
       }
     }
 
-    // Only use the first locale found
-    if (parts.length > 0) break;
+    if (parts.length > 0) {
+      return parts.join('\n');
+    }
   }
 
-  return parts.join('\n');
+  return '';
 }
 
 function isAuthorized(config: Config, userId: string, chatId: string): boolean {
