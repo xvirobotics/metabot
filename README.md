@@ -45,15 +45,17 @@ A bridge service connecting Feishu (Lark) Bot to Claude Code CLI. Chat with Clau
    - `im:resource` - Upload images and files (required for sending output files back to chat)
 5. Publish the app version and get approval
 
-### Installation
+### Quick Start
 
 ```bash
 git clone <your-repo-url>
 cd feishu-claudecode
-npm install
+./setup.sh
 ```
 
-### Configuration
+The setup script will check prerequisites, install dependencies, prompt for your Feishu app credentials, and start the service with PM2.
+
+### Manual Configuration
 
 ```bash
 cp bots.example.json bots.json   # edit with your bot configs
@@ -258,13 +260,17 @@ Feishu User
 
 ---
 
-### 第二步：安装项目
+### 第二步：一键部署
 
 ```bash
 git clone <your-repo-url>
 cd feishu-claudecode
-npm install
+./setup.sh
 ```
+
+脚本会自动检查环境、安装依赖、引导配置飞书凭证，并通过 PM2 启动服务。
+
+如需手动配置，继续看下面的步骤。
 
 ---
 
