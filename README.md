@@ -35,13 +35,15 @@ A bridge service connecting Feishu (Lark) Bot to Claude Code CLI. Chat with Clau
 
 1. Go to [Feishu Open Platform](https://open.feishu.cn/) and create an enterprise app
 2. Go to **App Capabilities** → Add **Bot**
-3. Go to **Events & Callbacks** → **Event Configuration**:
-   - Select **"Use persistent connection to receive events"** (WebSocket mode, no public IP needed)
-   - Add event: `im.message.receive_v1`
-4. Go to **Permissions** and enable:
+3. Go to **Permissions** and enable:
    - `im:message` - Send and receive messages
    - `im:message:readonly` - Read messages
    - `im:resource` - Upload images and files (required for sending output files back to chat)
+4. **Start the service first** (`./setup.sh` or `pm2 start ecosystem.config.cjs`), then configure events:
+   - Go to **Events & Callbacks** → **Event Configuration**
+   - Select **"Use persistent connection to receive events"** (WebSocket mode, no public IP needed)
+   - Feishu validates the WebSocket connection on save, so the service must be running
+   - Add event: `im.message.receive_v1`
 5. Publish the app version and get approval
 
 ### Quick Start
@@ -235,19 +237,22 @@ Feishu User
 1. 左侧菜单 →「应用能力」→「添加应用能力」
 2. 选择「机器人」，点击添加
 
-#### 1.4 配置事件订阅
-
-1. 左侧菜单 →「事件与回调」→「事件配置」
-2. **订阅方式选择「使用长连接接收事件」**（这样不需要公网 IP，本地即可运行）
-3. 添加事件：搜索并添加 `接收消息 im.message.receive_v1`
-
-#### 1.5 配置权限
+#### 1.4 配置权限
 
 1. 左侧菜单 →「权限管理」
 2. 搜索并开通以下权限：
    - `im:message` - 获取与发送单聊、群组消息
    - `im:message:readonly` - 读取消息（如已有 `im:message` 可跳过）
    - `im:resource` - 上传图片和文件（用于将 Claude 产出的文件发回聊天）
+
+#### 1.5 配置事件订阅（需要先启动服务）
+
+> **重要**：飞书在保存长连接配置时会验证 WebSocket 连接，因此必须**先启动服务**（第二步），再回来配置此步骤。
+
+1. 左侧菜单 →「事件与回调」→「事件配置」
+2. **订阅方式选择「使用长连接接收事件」**（不需要公网 IP，本地即可运行）
+3. 点击保存 — 飞书会验证 WebSocket 连接
+4. 添加事件：搜索并添加 `接收消息 im.message.receive_v1`
 
 #### 1.6 发布应用
 
