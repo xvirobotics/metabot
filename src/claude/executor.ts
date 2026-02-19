@@ -1,6 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { Config } from '../config.js';
+import type { BotConfig } from '../config.js';
 import type { Logger } from '../utils/logger.js';
 import { AsyncQueue } from '../utils/async-queue.js';
 
@@ -60,15 +60,13 @@ export interface ExecutionHandle {
 
 export class ClaudeExecutor {
   constructor(
-    private config: Config,
+    private config: BotConfig,
     private logger: Logger,
   ) {}
 
   private buildQueryOptions(cwd: string, sessionId: string | undefined, abortController: AbortController, outputsDir?: string): Record<string, unknown> {
     const queryOptions: Record<string, unknown> = {
       allowedTools: this.config.claude.allowedTools,
-      maxTurns: this.config.claude.maxTurns,
-      maxBudgetUsd: this.config.claude.maxBudgetUsd,
       permissionMode: 'bypassPermissions' as const,
       allowDangerouslySkipPermissions: true,
       cwd,
@@ -89,6 +87,14 @@ export class ClaudeExecutor {
       };
     }
 
+    if (this.config.claude.maxTurns !== undefined) {
+      queryOptions.maxTurns = this.config.claude.maxTurns;
+    }
+
+    if (this.config.claude.maxBudgetUsd !== undefined) {
+      queryOptions.maxBudgetUsd = this.config.claude.maxBudgetUsd;
+    }
+
     if (this.config.claude.model) {
       queryOptions.model = this.config.claude.model;
     }
@@ -103,7 +109,7 @@ export class ClaudeExecutor {
   startExecution(options: ExecutorOptions): ExecutionHandle {
     const { prompt, cwd, sessionId, abortController, outputsDir } = options;
 
-    this.logger.info({ cwd, hasSession: !!sessionId }, 'Starting Claude execution (multi-turn)');
+    this.logger.info({ cwd, hasSession: !!sessionId, outputsDir }, 'Starting Claude execution (multi-turn)');
 
     const inputQueue = new AsyncQueue<SDKUserMessage>();
 

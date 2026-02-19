@@ -2,7 +2,7 @@ import type { Logger } from '../utils/logger.js';
 
 export interface UserSession {
   sessionId: string | undefined;
-  workingDirectory: string | undefined;
+  workingDirectory: string;
   lastUsed: number;
 }
 
@@ -13,7 +13,7 @@ export class SessionManager {
   private cleanupTimer: ReturnType<typeof setInterval>;
 
   constructor(
-    private defaultWorkingDirectory: string | undefined,
+    private defaultWorkingDirectory: string,
     private logger: Logger,
   ) {
     // Periodic cleanup every hour
@@ -40,17 +40,6 @@ export class SessionManager {
     this.logger.debug({ chatId, sessionId: sessionId.slice(0, 8) }, 'Session ID updated');
   }
 
-  setWorkingDirectory(chatId: string, directory: string): void {
-    const session = this.getSession(chatId);
-    // Reset session when directory changes (old session is bound to old cwd)
-    if (session.workingDirectory !== directory && session.sessionId) {
-      session.sessionId = undefined;
-      this.logger.info({ chatId }, 'Session reset due to directory change');
-    }
-    session.workingDirectory = directory;
-    this.logger.info({ chatId, directory }, 'Working directory updated');
-  }
-
   resetSession(chatId: string): void {
     const session = this.sessions.get(chatId);
     if (session) {
@@ -58,11 +47,6 @@ export class SessionManager {
       // Keep working directory
       this.logger.info({ chatId }, 'Session reset');
     }
-  }
-
-  hasWorkingDirectory(chatId: string): boolean {
-    const session = this.getSession(chatId);
-    return !!session.workingDirectory;
   }
 
   private cleanupExpired(): void {

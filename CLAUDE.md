@@ -29,12 +29,12 @@ Feishu WSClient → EventHandler (auth, parse, @mention filter) → MessageBridg
 ### Key Modules
 
 - **`src/index.ts`** — Entrypoint. Creates Feishu WS client, fetches bot info for @mention detection, wires up the event dispatcher and bridge, handles graceful shutdown.
-- **`src/config.ts`** — Loads all config from env vars (`.env` via dotenv). `Config` interface is the central type.
+- **`src/config.ts`** — Loads config. `BotConfig` is the per-bot type; `AppConfig` wraps `{ bots, log }`. `loadAppConfig()` reads `BOTS_CONFIG` JSON file or falls back to single-bot mode from env vars.
 - **`src/feishu/event-handler.ts`** — Registers `im.message.receive_v1` on the Lark `EventDispatcher`. Handles auth checks, text/image parsing, @mention stripping, group chat filtering (only responds when @mentioned). Exports `IncomingMessage` type.
-- **`src/bridge/message-bridge.ts`** — Core orchestrator. Routes commands (`/cd`, `/reset`, `/stop`, `/status`, `/help`), manages running tasks per chat (one task at a time per `chatId`), executes Claude queries with streaming card updates, handles image input/output, enforces 10-minute timeout.
+- **`src/bridge/message-bridge.ts`** — Core orchestrator. Routes commands (`/reset`, `/stop`, `/status`, `/help`), manages running tasks per chat (one task at a time per `chatId`), executes Claude queries with streaming card updates, handles image input/output, enforces 10-minute timeout.
 - **`src/claude/executor.ts`** — Wraps `query()` from the Agent SDK as an async generator yielding `SDKMessage`. Configures permissionMode, allowedTools, MCP settings, session resume.
 - **`src/claude/stream-processor.ts`** — Transforms the raw SDK message stream into `CardState` objects for display. Tracks tool calls, response text, session ID, cost/duration. Also extracts image file paths from tool outputs.
-- **`src/claude/session-manager.ts`** — In-memory sessions keyed by `chatId`. Each session has a working directory and Claude session ID. Sessions expire after 24 hours. Changing working directory resets the session.
+- **`src/claude/session-manager.ts`** — In-memory sessions keyed by `chatId`. Each session has a fixed working directory (from bot config) and Claude session ID. Sessions expire after 24 hours.
 - **`src/feishu/card-builder.ts`** — Builds Feishu interactive card JSON. Cards have color-coded headers (blue=thinking/running, green=complete, red=error), tool call lists, markdown response content, and stats (cost/duration). Content truncated at 28KB.
 - **`src/feishu/message-sender.ts`** — Feishu API wrapper for sending/updating cards, uploading/downloading images, sending text.
 - **`src/bridge/rate-limiter.ts`** — Throttles card updates to avoid Feishu API rate limits (default 1.5s interval). Keeps only the latest pending update.
@@ -58,7 +58,26 @@ Sessions are keyed by `chatId` (not `userId`), so each group chat and DM gets it
 
 ## Configuration
 
+### Single-Bot Mode (default)
+
 All config is via environment variables in `.env` (see `.env.example`). Required: `FEISHU_APP_ID`, `FEISHU_APP_SECRET`. The Feishu app must have bot capability, WebSocket event mode, and `im.message.receive_v1` event subscription.
+
+### Multi-Bot Mode
+
+Set `BOTS_CONFIG=./bots.json` (or any path) to run multiple Feishu bots in a single process. Each bot gets its own Feishu app credentials, working directory, auth settings, and WebSocket connection. See `bots.example.json` for the file format.
+
+Per-bot config fields (JSON array entries):
+- **`name`** (required) — Bot identifier, used in log context
+- **`feishuAppId`** / **`feishuAppSecret`** (required) — Feishu app credentials
+- **`defaultWorkingDirectory`** (required) — Fixed working directory for Claude sessions
+- **`authorizedUserIds`** / **`authorizedChatIds`** — Access control lists (empty = allow all)
+- **`allowedTools`** — Claude tools whitelist (defaults to env var or `Read,Edit,Write,Glob,Grep,Bash`)
+- **`maxTurns`** / **`maxBudgetUsd`** / **`model`** — Claude execution limits (defaults from env vars)
+- **`outputsBaseDir`** — Base directory for output files
+
+When `BOTS_CONFIG` is set, `FEISHU_APP_ID` / `FEISHU_APP_SECRET` env vars are ignored. Other env vars (`CLAUDE_MAX_TURNS`, `LOG_LEVEL`, etc.) still serve as defaults for any bot field not specified in JSON.
+
+Sessions are isolated per `chatId` with no collision between bots since each bot has its own Feishu app and receives only its own messages.
 
 ## Prerequisites
 
@@ -108,6 +127,7 @@ This is the step-by-step procedure to configure a Feishu bot for this bridge ser
 4. Check these two scopes:
    - **`im:message`** — Read and send messages in private and group chats
    - **`im:message:readonly`** — Read messages in private and group chats
+   - **`im:resource`** — Upload images and files (needed to send output files back to chat)
 5. Click **"Add Scopes"**
 
 ### Step 5: Configure Events (requires running service)

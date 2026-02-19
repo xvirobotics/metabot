@@ -1,20 +1,25 @@
 import * as lark from '@larksuiteoapi/node-sdk';
-import { loadConfig } from './config.js';
-import { createLogger } from './utils/logger.js';
+import { loadAppConfig, type BotConfig } from './config.js';
+import { createLogger, type Logger } from './utils/logger.js';
 import { createEventDispatcher } from './feishu/event-handler.js';
 import { MessageSender } from './feishu/message-sender.js';
 import { MessageBridge } from './bridge/message-bridge.js';
 
-async function main() {
-  const config = loadConfig();
-  const logger = createLogger(config.log.level);
+interface BotHandle {
+  name: string;
+  bridge: MessageBridge;
+  wsClient: lark.WSClient;
+}
 
-  logger.info('Starting feishu-claudecode bridge...');
+async function startBot(botConfig: BotConfig, logger: Logger): Promise<BotHandle> {
+  const botLogger = logger.child({ bot: botConfig.name });
+
+  botLogger.info('Starting bot...');
 
   // Create Feishu API client
   const client = new lark.Client({
-    appId: config.feishu.appId,
-    appSecret: config.feishu.appSecret,
+    appId: botConfig.feishu.appId,
+    appSecret: botConfig.feishu.appSecret,
     disableTokenCache: false,
   });
 
@@ -24,47 +29,64 @@ async function main() {
     const botInfo: any = await client.request({ method: 'GET', url: '/open-apis/bot/v3/info' });
     botOpenId = botInfo?.bot?.open_id;
     if (botOpenId) {
-      logger.info({ botOpenId }, 'Bot info fetched');
+      botLogger.info({ botOpenId }, 'Bot info fetched');
     } else {
-      logger.warn('Could not get bot open_id, group @mention filtering may be less accurate');
+      botLogger.warn('Could not get bot open_id, group @mention filtering may be less accurate');
     }
   } catch (err) {
-    logger.warn({ err }, 'Failed to fetch bot info, group @mention filtering may be less accurate');
+    botLogger.warn({ err }, 'Failed to fetch bot info, group @mention filtering may be less accurate');
   }
 
   // Create sender and bridge
-  const sender = new MessageSender(client, logger);
-  const bridge = new MessageBridge(config, logger, sender);
+  const sender = new MessageSender(client, botLogger);
+  const bridge = new MessageBridge(botConfig, botLogger, sender);
 
   // Create event dispatcher wired to the bridge
-  const dispatcher = createEventDispatcher(config, logger, (msg) => {
+  const dispatcher = createEventDispatcher(botConfig, botLogger, (msg) => {
     bridge.handleMessage(msg).catch((err) => {
-      logger.error({ err, msg }, 'Unhandled error in message bridge');
+      botLogger.error({ err, msg }, 'Unhandled error in message bridge');
     });
   }, botOpenId);
 
   // Create WebSocket client
   const wsClient = new lark.WSClient({
-    appId: config.feishu.appId,
-    appSecret: config.feishu.appSecret,
+    appId: botConfig.feishu.appId,
+    appSecret: botConfig.feishu.appSecret,
     loggerLevel: lark.LoggerLevel.info,
   });
 
   // Start WebSocket connection with event dispatcher
   await wsClient.start({ eventDispatcher: dispatcher });
 
-  logger.info('feishu-claudecode bridge is running');
-  logger.info({
-    defaultWorkingDirectory: config.claude.defaultWorkingDirectory || '(not set)',
-    allowedTools: config.claude.allowedTools,
-    maxTurns: config.claude.maxTurns,
-    maxBudgetUsd: config.claude.maxBudgetUsd,
+  botLogger.info('Bot is running');
+  botLogger.info({
+    defaultWorkingDirectory: botConfig.claude.defaultWorkingDirectory,
+    allowedTools: botConfig.claude.allowedTools,
+    maxTurns: botConfig.claude.maxTurns ?? 'unlimited',
+    maxBudgetUsd: botConfig.claude.maxBudgetUsd ?? 'unlimited',
   }, 'Configuration');
+
+  return { name: botConfig.name, bridge, wsClient };
+}
+
+async function main() {
+  const appConfig = loadAppConfig();
+  const logger = createLogger(appConfig.log.level);
+
+  logger.info({ botCount: appConfig.bots.length }, 'Starting feishu-claudecode bridge...');
+
+  const handles: BotHandle[] = await Promise.all(
+    appConfig.bots.map((botConfig) => startBot(botConfig, logger)),
+  );
+
+  logger.info({ bots: handles.map((h) => h.name) }, 'All bots started');
 
   // Graceful shutdown
   const shutdown = () => {
     logger.info('Shutting down...');
-    bridge.destroy();
+    for (const handle of handles) {
+      handle.bridge.destroy();
+    }
     process.exit(0);
   };
 

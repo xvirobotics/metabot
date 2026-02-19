@@ -1,5 +1,5 @@
 import * as lark from '@larksuiteoapi/node-sdk';
-import type { Config } from '../config.js';
+import type { BotConfig } from '../config.js';
 import type { Logger } from '../utils/logger.js';
 
 export interface IncomingMessage {
@@ -14,7 +14,7 @@ export interface IncomingMessage {
 export type MessageHandler = (msg: IncomingMessage) => void;
 
 export function createEventDispatcher(
-  config: Config,
+  config: BotConfig,
   logger: Logger,
   onMessage: MessageHandler,
   botOpenId?: string,
@@ -193,7 +193,7 @@ function extractTextFromPost(content: Record<string, unknown>): string {
   return '';
 }
 
-function isAuthorized(config: Config, userId: string, chatId: string): boolean {
+function isAuthorized(config: BotConfig, userId: string, chatId: string): boolean {
   const { authorizedUserIds, authorizedChatIds } = config.auth;
 
   // If no restrictions configured, allow all

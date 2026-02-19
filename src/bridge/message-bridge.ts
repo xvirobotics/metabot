@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Config } from '../config.js';
+import * as os from 'node:os';
+import type { BotConfig } from '../config.js';
 import type { Logger } from '../utils/logger.js';
 import type { IncomingMessage } from '../feishu/event-handler.js';
 import { MessageSender } from '../feishu/message-sender.js';
@@ -41,7 +41,7 @@ export class MessageBridge {
   private runningTasks = new Map<string, RunningTask>(); // keyed by chatId
 
   constructor(
-    private config: Config,
+    private config: BotConfig,
     private logger: Logger,
     private sender: MessageSender,
   ) {
@@ -56,19 +56,6 @@ export class MessageBridge {
     // Handle commands (always allowed, even during pending questions)
     if (text.startsWith('/')) {
       await this.handleCommand(msg);
-      return;
-    }
-
-    // Check working directory
-    if (!this.sessionManager.hasWorkingDirectory(chatId)) {
-      await this.sender.sendCard(
-        chatId,
-        buildTextCard(
-          '⚠️ Working Directory Not Set',
-          'Please set a working directory first:\n`/cd /path/to/your/project`',
-          'orange',
-        ),
-      );
       return;
     }
 
@@ -153,52 +140,12 @@ export class MessageBridge {
 
   private async handleCommand(msg: IncomingMessage): Promise<void> {
     const { userId, chatId, text } = msg;
-    const [cmd, ...args] = text.split(/\s+/);
-    const arg = args.join(' ').trim();
+    const [cmd] = text.split(/\s+/);
 
     switch (cmd.toLowerCase()) {
       case '/help':
         await this.sender.sendCard(chatId, buildHelpCard());
         break;
-
-      case '/cd': {
-        if (!arg) {
-          await this.sender.sendCard(
-            chatId,
-            buildTextCard('⚠️ Usage', '`/cd /path/to/project`', 'orange'),
-          );
-          return;
-        }
-
-        // Expand ~ to home directory
-        const expanded = arg.startsWith('~') ? arg.replace('~', os.homedir()) : arg;
-        const resolvedPath = path.resolve(expanded);
-
-        // Validate directory exists
-        try {
-          const stat = fs.statSync(resolvedPath);
-          if (!stat.isDirectory()) {
-            await this.sender.sendCard(
-              chatId,
-              buildTextCard('❌ Error', `Not a directory: \`${resolvedPath}\``, 'red'),
-            );
-            return;
-          }
-        } catch {
-          await this.sender.sendCard(
-            chatId,
-            buildTextCard('❌ Error', `Directory not found: \`${resolvedPath}\``, 'red'),
-          );
-          return;
-        }
-
-        this.sessionManager.setWorkingDirectory(chatId, resolvedPath);
-        await this.sender.sendCard(
-          chatId,
-          buildTextCard('✅ Working Directory Set', `\`${resolvedPath}\``, 'green'),
-        );
-        break;
-      }
 
       case '/reset':
         this.sessionManager.resetSession(chatId);
@@ -251,7 +198,7 @@ export class MessageBridge {
   private async executeQuery(msg: IncomingMessage): Promise<void> {
     const { userId, chatId, text, imageKey, messageId: msgId } = msg;
     const session = this.sessionManager.getSession(chatId);
-    const cwd = session.workingDirectory!;
+    const cwd = session.workingDirectory;
     const abortController = new AbortController();
 
     // Handle image download if present
@@ -367,12 +314,15 @@ export class MessageBridge {
           runningTask.questionTimeoutId = undefined;
         }
 
-        // Throttled card update for non-final states
-        if (state.status !== 'complete' && state.status !== 'error') {
-          rateLimiter.schedule(() => {
-            this.sender.updateCard(messageId, buildCard(state));
-          });
+        // Break on final states — the multi-turn stream won't close on its own
+        if (state.status === 'complete' || state.status === 'error') {
+          break;
         }
+
+        // Throttled card update for non-final states
+        rateLimiter.schedule(() => {
+          this.sender.updateCard(messageId, buildCard(state));
+        });
       }
 
       // Flush any pending update
@@ -427,9 +377,15 @@ export class MessageBridge {
           this.logger.info({ filePath: file.filePath }, 'Sending output image from outputs dir');
           await this.sender.sendImageFile(chatId, file.filePath);
         } else if (!file.isImage && file.sizeBytes < 30 * 1024 * 1024) {
+          // Try file upload first; fall back to sending text content for small text files
           const feishuType = OutputsManager.feishuFileType(file.extension);
           this.logger.info({ filePath: file.filePath, feishuType }, 'Sending output file from outputs dir');
-          await this.sender.sendLocalFile(chatId, file.filePath, file.fileName, feishuType);
+          const sent = await this.sender.sendLocalFile(chatId, file.filePath, file.fileName, feishuType);
+          if (!sent && OutputsManager.isTextFile(file.extension) && file.sizeBytes < 30 * 1024) {
+            this.logger.info({ filePath: file.filePath }, 'File upload failed, sending as text message');
+            const content = fs.readFileSync(file.filePath, 'utf-8');
+            await this.sender.sendText(chatId, `📄 ${file.fileName}\n\n${content}`);
+          }
         } else {
           this.logger.warn({ filePath: file.filePath, sizeBytes: file.sizeBytes }, 'Output file too large to send');
         }

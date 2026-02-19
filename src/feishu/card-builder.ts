@@ -157,16 +157,14 @@ export function buildHelpCard(): string {
         tag: 'markdown',
         content: [
           '**Available Commands:**',
-          '`/cd /path/to/project` - Set working directory',
-          '`/reset` - Clear session, start fresh (keeps working directory)',
+          '`/reset` - Clear session, start fresh',
           '`/stop` - Abort current running task',
-          '`/status` - Show current session and directory info',
+          '`/status` - Show current session info',
           '`/help` - Show this help message',
           '',
           '**Usage:**',
           'Send any text message to start a conversation with Claude Code.',
-          'Claude will execute in the working directory you set with `/cd`.',
-          'Each user has an independent session and working directory.',
+          'Each chat has an independent session with a fixed working directory.',
         ].join('\n'),
       },
     ],
@@ -176,7 +174,7 @@ export function buildHelpCard(): string {
 
 export function buildStatusCard(
   userId: string,
-  workingDirectory: string | undefined,
+  workingDirectory: string,
   sessionId: string | undefined,
   isRunning: boolean,
 ): string {
@@ -194,7 +192,7 @@ export function buildStatusCard(
         tag: 'markdown',
         content: [
           `**User:** \`${userId}\``,
-          `**Working Directory:** ${workingDirectory ? `\`${workingDirectory}\`` : '_Not set (use /cd to set)_'}`,
+          `**Working Directory:** \`${workingDirectory}\``,
           `**Session:** ${sessionId ? `\`${sessionId.slice(0, 8)}...\`` : '_None_'}`,
           `**Running:** ${isRunning ? 'Yes ⏳' : 'No'}`,
         ].join('\n'),

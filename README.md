@@ -19,7 +19,8 @@ A bridge service connecting Feishu (Lark) Bot to Claude Code CLI. Chat with Clau
 
 - **Remote access** - Use Claude Code from any Feishu device, including mobile
 - **Streaming updates** - Real-time execution progress via interactive card updates
-- **Multi-user parallel** - Independent sessions and working directories per chat (each group/DM has its own session)
+- **Multi-bot support** - Run multiple bots in one process, each bound to a different project directory and Feishu app
+- **Multi-user parallel** - Independent sessions per chat (each group/DM has its own session)
 - **Multi-turn conversations** - Automatic context persistence across messages
 - **Image support** - Send images to Claude for analysis; Claude-generated images are sent back
 - **MCP integration** - Automatically loads MCP server configs from Claude Code settings
@@ -41,6 +42,7 @@ A bridge service connecting Feishu (Lark) Bot to Claude Code CLI. Chat with Clau
 4. Go to **Permissions** and enable:
    - `im:message` - Send and receive messages
    - `im:message:readonly` - Read messages
+   - `im:resource` - Upload images and files (required for sending output files back to chat)
 5. Publish the app version and get approval
 
 ### Installation
@@ -54,23 +56,49 @@ npm install
 ### Configuration
 
 ```bash
-cp .env.example .env
+cp bots.example.json bots.json   # edit with your bot configs
+cp .env.example .env              # edit global settings
 ```
 
-Edit `.env`:
+**`bots.json`** — defines one or more bots (see `bots.example.json`):
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `name` | Yes | - | Bot identifier (used in logs) |
+| `feishuAppId` | Yes | - | Feishu App ID |
+| `feishuAppSecret` | Yes | - | Feishu App Secret |
+| `defaultWorkingDirectory` | Yes | - | Fixed working directory for this bot |
+| `authorizedUserIds` | No | (allow all) | Array of user open_ids |
+| `authorizedChatIds` | No | (allow all) | Array of chat_ids |
+| `allowedTools` | No | Read,Edit,Write,Glob,Grep,Bash | Allowed Claude tools |
+| `maxTurns` | No | unlimited | Max conversation turns per query |
+| `maxBudgetUsd` | No | unlimited | Max cost per query (USD) |
+| `model` | No | SDK default | Claude model |
+
+**`.env`** — global settings:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `FEISHU_APP_ID` | Yes | - | Feishu App ID |
-| `FEISHU_APP_SECRET` | Yes | - | Feishu App Secret |
-| `AUTHORIZED_USER_IDS` | No | (allow all) | Comma-separated user open_ids |
-| `AUTHORIZED_CHAT_IDS` | No | (allow all) | Comma-separated chat_ids |
-| `CLAUDE_DEFAULT_WORKING_DIRECTORY` | No | - | Default working directory |
-| `CLAUDE_ALLOWED_TOOLS` | No | Read,Edit,Write,Glob,Grep,Bash,WebSearch,WebFetch | Allowed tools |
-| `CLAUDE_MAX_TURNS` | No | 50 | Max conversation turns per query |
-| `CLAUDE_MAX_BUDGET_USD` | No | 1.0 | Max cost per query (USD) |
-| `CLAUDE_MODEL` | No | SDK default | Claude model |
+| `BOTS_CONFIG` | No | - | Path to `bots.json`. If unset, falls back to single-bot env vars |
 | `LOG_LEVEL` | No | info | Log level |
+
+<details>
+<summary>Single-bot mode (legacy env var config)</summary>
+
+If `BOTS_CONFIG` is not set, a single bot is configured from env vars:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `FEISHU_APP_ID` | Yes | Feishu App ID |
+| `FEISHU_APP_SECRET` | Yes | Feishu App Secret |
+| `CLAUDE_DEFAULT_WORKING_DIRECTORY` | Yes | Working directory |
+| `AUTHORIZED_USER_IDS` | No | Comma-separated user open_ids |
+| `CLAUDE_ALLOWED_TOOLS` | No | Comma-separated tools |
+| `CLAUDE_MAX_TURNS` | No | Max turns (unlimited if unset) |
+| `CLAUDE_MAX_BUDGET_USD` | No | Max budget (unlimited if unset) |
+| `CLAUDE_MODEL` | No | Claude model |
+
+</details>
 
 ### Usage
 
@@ -86,8 +114,7 @@ npm run build && npm start
 
 | Command | Description |
 |---------|-------------|
-| `/cd /path/to/project` | Set working directory (required before first use) |
-| `/reset` | Clear session, start fresh (keeps working directory) |
+| `/reset` | Clear session, start fresh |
 | `/stop` | Abort current running task |
 | `/status` | Show current session info |
 | `/help` | Show help message |
@@ -121,7 +148,7 @@ Example config:
 }
 ```
 
-The bot loads MCP servers based on the working directory set via `/cd`. If you already have MCP servers configured for Claude Code CLI, they work automatically.
+The bot loads MCP servers based on the bot's configured working directory. If you already have MCP servers configured for Claude Code CLI, they work automatically.
 
 ### Security Note
 
@@ -132,8 +159,8 @@ This service runs Claude Code in **`bypassPermissions` mode** — Claude can rea
 - Claude has full read/write access to the working directory
 - Claude can execute arbitrary shell commands if `Bash` is in the allowed tools
 - Use `CLAUDE_ALLOWED_TOOLS` to restrict capabilities (e.g. remove `Bash` for read-only use)
-- Use `CLAUDE_MAX_BUDGET_USD` to cap per-request cost
-- Use `AUTHORIZED_USER_IDS` to restrict who can access the bot
+- Use `maxBudgetUsd` in bot config to cap per-request cost
+- Use `authorizedUserIds` in bot config to restrict who can access the bot
 - **Never point the bot at directories containing sensitive data without proper access controls**
 
 ### Architecture
@@ -162,7 +189,8 @@ Feishu User
 
 - **远程访问** - 在飞书任意设备上使用 Claude Code，手机也能写代码
 - **流式更新** - 通过飞书交互卡片实时展示执行进度
-- **多用户并行** - 每个会话（群聊/私聊）独立会话和工作目录，互不干扰
+- **多机器人支持** - 单进程运行多个 Bot，每个 Bot 绑定不同项目目录和飞书应用
+- **多用户并行** - 每个会话（群聊/私聊）独立会话，互不干扰
 - **多轮对话** - 自动维护对话上下文，支持连续交互
 - **图片支持** - 发图片给 Claude 分析；Claude 生成的图片自动回传飞书
 - **MCP 集成** - 自动加载 Claude Code 配置文件中的 MCP 服务器
@@ -205,6 +233,7 @@ Feishu User
 2. 搜索并开通以下权限：
    - `im:message` - 获取与发送单聊、群组消息
    - `im:message:readonly` - 读取消息（如已有 `im:message` 可跳过）
+   - `im:resource` - 上传图片和文件（用于将 Claude 产出的文件发回聊天）
 
 #### 1.6 发布应用
 
@@ -226,45 +255,52 @@ npm install
 
 ---
 
-### 第三步：配置环境变量
+### 第三步：配置
 
 ```bash
-cp .env.example .env
+cp bots.example.json bots.json   # 编辑 Bot 配置
+cp .env.example .env              # 编辑全局设置
 ```
 
-编辑 `.env` 文件：
+**`bots.json`** — 定义一个或多个 Bot（参考 `bots.example.json`）：
+
+```json
+[
+  {
+    "name": "my-project",
+    "feishuAppId": "cli_xxxxxxxxxx",
+    "feishuAppSecret": "xxxxxxxxxxxxxxxxxx",
+    "defaultWorkingDirectory": "/path/to/your/project",
+    "authorizedUserIds": ["ou_xxxx"],
+    "allowedTools": ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"]
+  }
+]
+```
+
+| 字段 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `name` | 是 | - | Bot 标识名（用于日志区分） |
+| `feishuAppId` | 是 | - | 飞书应用 App ID |
+| `feishuAppSecret` | 是 | - | 飞书应用 App Secret |
+| `defaultWorkingDirectory` | 是 | - | 固定工作目录 |
+| `authorizedUserIds` | 否 | 不限制 | 允许使用的用户 open_id 数组 |
+| `authorizedChatIds` | 否 | 不限制 | 允许使用的 chat_id 数组 |
+| `allowedTools` | 否 | Read,Edit,Write,Glob,Grep,Bash | Claude 可用工具 |
+| `maxTurns` | 否 | 不限制 | 每次请求最大对话轮数 |
+| `maxBudgetUsd` | 否 | 不限制 | 每次请求最大花费（美元） |
+| `model` | 否 | SDK 默认 | 指定 Claude 模型 |
+
+**`.env`** — 全局设置：
 
 ```bash
-# ===== 必填 =====
-
-# 飞书应用凭证（第一步获取的）
-FEISHU_APP_ID=cli_xxxxxxxxxx
-FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxx
-
-# ===== 选填 =====
-
-# 访问控制（逗号分隔，留空表示不限制）
-AUTHORIZED_USER_IDS=
-AUTHORIZED_CHAT_IDS=
-
-# Claude Code 默认工作目录（留空则需要用户先用 /cd 指定）
-CLAUDE_DEFAULT_WORKING_DIRECTORY=
-
-# Claude 可用的工具
-CLAUDE_ALLOWED_TOOLS=Read,Edit,Write,Glob,Grep,Bash,WebSearch,WebFetch
-
-# 每次请求的最大对话轮数
-CLAUDE_MAX_TURNS=50
-
-# 每次请求的最大花费（美元）
-CLAUDE_MAX_BUDGET_USD=1.0
-
-# 指定模型（留空使用 SDK 默认模型）
-CLAUDE_MODEL=
+# 指向 Bot 配置文件
+BOTS_CONFIG=./bots.json
 
 # 日志级别
 LOG_LEVEL=info
 ```
+
+> **多 Bot 模式**：在 `bots.json` 中定义多个条目即可。每个 Bot 绑定不同的飞书应用和项目目录，在单个进程内同时运行。
 
 #### 关于 Claude Code 认证
 
@@ -318,26 +354,21 @@ npm start
 #### 基本流程
 
 1. 在飞书中找到你的机器人（私聊或拉入群组）
-2. 发送 `/cd /path/to/your/project` 设置工作目录
-3. 发送任意消息开始和 Claude Code 对话
-4. 卡片会实时更新执行进度，完成后显示最终结果
+2. 直接发送消息开始和 Claude Code 对话（工作目录已在配置中固定）
+3. 卡片会实时更新执行进度，完成后显示最终结果
 
 #### 可用命令
 
 | 命令 | 说明 |
 |------|------|
-| `/cd /path/to/project` | 设置工作目录（首次使用必须先设置） |
-| `/reset` | 清除对话历史，重新开始（保留工作目录设置） |
+| `/reset` | 清除对话历史，重新开始 |
 | `/stop` | 中止当前正在执行的任务 |
-| `/status` | 查看当前会话状态和工作目录 |
+| `/status` | 查看当前会话状态 |
 | `/help` | 显示帮助信息 |
 
 #### 使用示例
 
 ```
-你：/cd /Users/me/my-project
-Bot：✅ Working Directory Set - /Users/me/my-project
-
 你：帮我看看这个项目的结构，有哪些主要模块
 Bot：🔵 Thinking... → 🔵 Running... → 🟢 Complete
     （卡片实时更新，展示 Claude 正在读取哪些文件、分析结果等）
@@ -364,12 +395,12 @@ Bot：✅ Session Reset - 开始新对话
 
 ---
 
-### 多用户说明
+### 多用户 / 多 Bot 说明
 
 - 会话按**聊天**（chat_id）隔离，每个群聊和私聊都有独立的会话
-- 同一用户在不同群组中拥有不同的会话和工作目录
-- 每个聊天可以通过 `/cd` 设置各自的工作目录
+- 每个 Bot 绑定固定的工作目录，不同 Bot 对应不同项目
 - 不同聊天的任务可以同时并行执行
+- 多个 Bot 在单进程中运行，各自独立的飞书 WebSocket 连接
 
 ---
 
@@ -404,7 +435,7 @@ MCP 服务器配置直接复用 Claude Code 的标准配置文件，无需额外
 }
 ```
 
-Bot 会根据 `/cd` 设置的工作目录加载对应的 MCP 配置。如果你已经为 Claude Code CLI 配置过 MCP 服务器，它们会自动生效。
+Bot 会根据配置中的工作目录加载对应的 MCP 配置。如果你已经为 Claude Code CLI 配置过 MCP 服务器，它们会自动生效。
 
 ---
 
@@ -432,9 +463,9 @@ Bot 会根据 `/cd` 设置的工作目录加载对应的 MCP 配置。如果你�
 
 - Claude 对工作目录拥有完整的读写权限
 - 如果允许工具列表中包含 `Bash`，Claude 可以执行任意 Shell 命令
-- 通过 `CLAUDE_ALLOWED_TOOLS` 限制可用工具（例如去掉 `Bash` 实现只读模式）
-- 通过 `CLAUDE_MAX_BUDGET_USD` 限制单次请求的最大花费
-- 通过 `AUTHORIZED_USER_IDS` 限制谁可以使用机器人
+- 通过 `allowedTools` 限制可用工具（例如去掉 `Bash` 实现只读模式）
+- 通过 `maxBudgetUsd` 限制单次请求的最大花费
+- 通过 `authorizedUserIds` 限制谁可以使用机器人
 - **不要将机器人指向包含敏感数据的目录，除非已做好访问控制**
 
 ---
@@ -452,7 +483,7 @@ Bot 会根据 `/cd` 设置的工作目录加载对应的 MCP 配置。如果你�
 2. 事件订阅是否选择了「长连接」模式
 3. 是否添加了 `im.message.receive_v1` 事件
 4. 权限 `im:message` 是否已开通
-5. 如果配置了 `AUTHORIZED_USER_IDS`，确认你的 open_id 在列表中
+5. 如果配置了 `authorizedUserIds`，确认你的 open_id 在列表中
 
 **Q: 如何获取用户的 open_id？**
 
@@ -460,10 +491,14 @@ Bot 会根据 `/cd` 设置的工作目录加载对应的 MCP 配置。如果你�
 
 **Q: 如何限制只有特定人可以使用？**
 
-在 `.env` 中设置 `AUTHORIZED_USER_IDS`，多个 ID 用逗号分隔：
+在 `bots.json` 中设置 `authorizedUserIds`：
 
-```bash
-AUTHORIZED_USER_IDS=ou_xxxx1,ou_xxxx2
+```json
+{
+  "name": "my-bot",
+  "authorizedUserIds": ["ou_xxxx1", "ou_xxxx2"],
+  ...
+}
 ```
 
 **Q: Claude 执行超时了怎么办？**

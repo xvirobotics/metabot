@@ -64,6 +64,12 @@ export class OutputsManager {
     } catch { /* ignore */ }
   }
 
+  /** Check if a file extension is a text-based format that can be sent as text. */
+  static isTextFile(ext: string): boolean {
+    const textExts = new Set(['.txt', '.md', '.csv', '.json', '.xml', '.yaml', '.yml', '.log', '.html', '.css', '.js', '.ts', '.py', '.sh', '.sql', '.ini', '.cfg', '.conf', '.toml']);
+    return textExts.has(ext);
+  }
+
   /** Map file extension to Feishu file type for im.v1.file.create. */
   static feishuFileType(ext: string): string {
     switch (ext) {

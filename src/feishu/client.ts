@@ -1,5 +1,5 @@
 import * as lark from '@larksuiteoapi/node-sdk';
-import type { Config } from '../config.js';
+import type { BotConfig } from '../config.js';
 import type { Logger } from '../utils/logger.js';
 
 export interface FeishuClients {
@@ -8,7 +8,7 @@ export interface FeishuClients {
 }
 
 export function createFeishuClients(
-  config: Config,
+  config: BotConfig,
   logger: Logger,
 ): FeishuClients {
   const client = new lark.Client({
