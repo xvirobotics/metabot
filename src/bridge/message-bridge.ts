@@ -19,7 +19,7 @@ import { SessionManager } from '../claude/session-manager.js';
 import { RateLimiter } from './rate-limiter.js';
 import { OutputsManager } from './outputs-manager.js';
 
-const TASK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const TASK_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
 const METAMEMORY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes for metamemory tasks
 const QUESTION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes for user to answer
 
