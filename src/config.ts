@@ -29,6 +29,7 @@ export interface AppConfig {
   log: {
     level: string;
   };
+  metaMemoryDir: string;
 }
 
 function required(name: string): string {
@@ -125,11 +126,17 @@ export function loadAppConfig(): AppConfig {
     bots = [botFromEnv()];
   }
 
+  const metaMemoryDir = path.resolve(
+    process.env.META_MEMORY_DIR || path.join(os.homedir(), '.feishu-claudecode', 'metamemory'),
+  );
+  fs.mkdirSync(metaMemoryDir, { recursive: true });
+
   return {
     bots,
     log: {
       level: process.env.LOG_LEVEL || 'info',
     },
+    metaMemoryDir,
   };
 }
 

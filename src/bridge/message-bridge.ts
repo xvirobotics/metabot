@@ -20,6 +20,7 @@ import { RateLimiter } from './rate-limiter.js';
 import { OutputsManager } from './outputs-manager.js';
 
 const TASK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const METAMEMORY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes for metamemory tasks
 const QUESTION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes for user to answer
 
 interface RunningTask {
@@ -39,11 +40,13 @@ export class MessageBridge {
   private sessionManager: SessionManager;
   private outputsManager: OutputsManager;
   private runningTasks = new Map<string, RunningTask>(); // keyed by chatId
+  private runningMetaMemoryTasks = new Map<string, RunningTask>(); // keyed by chatId
 
   constructor(
     private config: BotConfig,
     private logger: Logger,
     private sender: MessageSender,
+    private metaMemoryDir: string,
   ) {
     this.executor = new ClaudeExecutor(config, logger);
     this.sessionManager = new SessionManager(config.claude.defaultWorkingDirectory, logger, config.name);
@@ -157,13 +160,21 @@ export class MessageBridge {
 
       case '/stop': {
         const task = this.runningTasks.get(chatId);
-        if (task) {
-          if (task.questionTimeoutId) {
-            clearTimeout(task.questionTimeoutId);
+        const metaTask = this.runningMetaMemoryTasks.get(chatId);
+        if (task || metaTask) {
+          if (task) {
+            if (task.questionTimeoutId) {
+              clearTimeout(task.questionTimeoutId);
+            }
+            task.executionHandle.finish();
+            task.abortController.abort();
+            this.runningTasks.delete(chatId);
           }
-          task.executionHandle.finish();
-          task.abortController.abort();
-          this.runningTasks.delete(chatId);
+          if (metaTask) {
+            metaTask.executionHandle.finish();
+            metaTask.abortController.abort();
+            this.runningMetaMemoryTasks.delete(chatId);
+          }
           await this.sender.sendCard(
             chatId,
             buildTextCard('🛑 Stopped', 'Current task has been aborted.', 'orange'),
@@ -184,6 +195,28 @@ export class MessageBridge {
           chatId,
           buildStatusCard(userId, session.workingDirectory, session.sessionId, isRunning),
         );
+        break;
+      }
+
+      case '/metamemory': {
+        const instruction = text.slice('/metamemory'.length).trim();
+        if (!instruction) {
+          await this.sender.sendCard(
+            chatId,
+            buildTextCard(
+              '📝 MetaMemory',
+              'Usage: `/metamemory <instruction>`\n\nExamples:\n- `/metamemory list all notes`\n- `/metamemory create a note about project conventions`\n- `/metamemory search for notes about deployment`\n- `/metamemory delete test.md`',
+              'blue',
+            ),
+          );
+        } else if (this.runningMetaMemoryTasks.has(chatId)) {
+          await this.sender.sendCard(
+            chatId,
+            buildTextCard('⏳ MetaMemory Busy', 'A metamemory operation is already running. Use `/stop` to abort it.', 'orange'),
+          );
+        } else {
+          await this.executeMetaMemoryQuery(msg, instruction);
+        }
         break;
       }
 
@@ -257,6 +290,7 @@ export class MessageBridge {
       sessionId: session.sessionId,
       abortController,
       outputsDir,
+      metaMemoryDir: this.metaMemoryDir,
     });
 
     const rateLimiter = new RateLimiter(1500);
@@ -410,6 +444,106 @@ export class MessageBridge {
     }
   }
 
+  private async executeMetaMemoryQuery(msg: IncomingMessage, instruction: string): Promise<void> {
+    const { chatId, userId } = msg;
+    const abortController = new AbortController();
+
+    const displayPrompt = `📝 ${instruction}`;
+    const processor = new StreamProcessor(displayPrompt);
+    const initialState: CardState = {
+      status: 'thinking',
+      userPrompt: displayPrompt,
+      responseText: '',
+      toolCalls: [],
+    };
+
+    const messageId = await this.sender.sendCard(chatId, buildCard(initialState));
+    if (!messageId) {
+      this.logger.error('Failed to send initial metamemory card, aborting');
+      return;
+    }
+
+    const executionHandle = this.executor.startMetaMemoryExecution(
+      instruction,
+      this.metaMemoryDir,
+      abortController,
+    );
+
+    const rateLimiter = new RateLimiter(1500);
+
+    const runningTask: RunningTask = {
+      abortController,
+      startTime: Date.now(),
+      executionHandle,
+      pendingQuestion: null,
+      cardMessageId: messageId,
+      processor,
+      rateLimiter,
+      chatId,
+    };
+    this.runningMetaMemoryTasks.set(chatId, runningTask);
+
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      this.logger.warn({ chatId, userId }, 'Metamemory task timeout, aborting');
+      timedOut = true;
+      executionHandle.finish();
+      abortController.abort();
+    }, METAMEMORY_TIMEOUT_MS);
+
+    let lastState: CardState = initialState;
+
+    try {
+      for await (const message of executionHandle.stream) {
+        if (abortController.signal.aborted) break;
+
+        const state = processor.processMessage(message);
+        lastState = state;
+
+        if (state.status === 'complete' || state.status === 'error') {
+          break;
+        }
+
+        rateLimiter.schedule(() => {
+          this.sender.updateCard(messageId, buildCard(state));
+        });
+      }
+
+      await rateLimiter.flush();
+
+      if (lastState.status !== 'complete' && lastState.status !== 'error') {
+        if (timedOut) {
+          lastState = { ...lastState, status: 'error', errorMessage: 'MetaMemory task timed out (5 min limit)' };
+        } else if (abortController.signal.aborted) {
+          lastState = { ...lastState, status: 'error', errorMessage: 'Task was stopped' };
+        } else {
+          lastState = {
+            ...lastState,
+            status: lastState.responseText ? 'complete' : 'error',
+            errorMessage: lastState.responseText ? undefined : 'MetaMemory session ended unexpectedly',
+          };
+        }
+      }
+
+      await this.sender.updateCard(messageId, buildCard(lastState));
+    } catch (err: any) {
+      this.logger.error({ err, chatId, userId }, 'MetaMemory execution error');
+      const errorState: CardState = {
+        status: 'error',
+        userPrompt: displayPrompt,
+        responseText: lastState.responseText,
+        toolCalls: lastState.toolCalls,
+        errorMessage: err.message || 'Unknown error',
+      };
+      await rateLimiter.flush();
+      await this.sender.updateCard(messageId, buildCard(errorState));
+    } finally {
+      clearTimeout(timeoutId);
+      executionHandle.finish();
+      this.runningMetaMemoryTasks.delete(chatId);
+    }
+  }
+
   private async sendOutputFiles(
     chatId: string,
     outputsDir: string,
@@ -479,6 +613,15 @@ export class MessageBridge {
       this.logger.info({ chatId }, 'Aborted running task during shutdown');
     }
     this.runningTasks.clear();
+
+    // Abort all running metamemory tasks
+    for (const [chatId, task] of this.runningMetaMemoryTasks) {
+      task.executionHandle.finish();
+      task.abortController.abort();
+      this.logger.info({ chatId }, 'Aborted running metamemory task during shutdown');
+    }
+    this.runningMetaMemoryTasks.clear();
+
     this.sessionManager.destroy();
   }
 }

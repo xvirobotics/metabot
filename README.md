@@ -133,6 +133,7 @@ pm2 save                # Save current process list
 | `/reset` | Clear session, start fresh |
 | `/stop` | Abort current running task |
 | `/status` | Show current session info |
+| `/metamemory <instruction>` | Manage shared knowledge notes |
 | `/help` | Show help message |
 
 ### Image Support
@@ -142,6 +143,25 @@ pm2 save                # Save current process list
 **Receive images from Claude:** When Claude generates or writes image files (via Write tool, Bash, or MCP tools), they are automatically uploaded and sent back to Feishu.
 
 Supported formats: PNG, JPEG, GIF, WEBP, BMP, SVG, TIFF (max 10MB per Feishu limit).
+
+### MetaMemory (Shared Knowledge Base)
+
+MetaMemory is a shared persistent memory system — a directory of markdown files that all bots can read and write. It allows Claude to remember information across conversations and share knowledge between bots.
+
+**How it works:**
+- A shared directory (default `~/.feishu-claudecode/metamemory`) stores markdown notes
+- Claude is aware of this directory during normal conversations and can save knowledge there when asked
+- The `/metamemory` command provides a dedicated interface for managing notes
+
+**Commands:**
+```
+/metamemory list all notes
+/metamemory create a note about project conventions
+/metamemory search for notes about deployment
+/metamemory delete test.md
+```
+
+**Configuration:** Set `META_MEMORY_DIR` in `.env` to customize the directory path. All bots share the same metamemory directory by default.
 
 ### MCP Server Configuration
 
@@ -408,6 +428,7 @@ pm2 save                # 保存当前进程列表
 | `/reset` | 清除对话历史，重新开始 |
 | `/stop` | 中止当前正在执行的任务 |
 | `/status` | 查看当前会话状态 |
+| `/metamemory <指令>` | 管理共享知识笔记 |
 | `/help` | 显示帮助信息 |
 
 #### 使用示例
@@ -455,6 +476,27 @@ Bot：✅ Session Reset - 开始新对话
 **接收 Claude 生成的图片：** 当 Claude 通过工具（Write、Bash、MCP 等）生成图片文件时，图片会自动上传并发送到飞书聊天中。
 
 支持格式：PNG、JPEG、GIF、WEBP、BMP、SVG、TIFF（单张最大 10MB，飞书限制）。
+
+---
+
+### MetaMemory（共享知识库）
+
+MetaMemory 是一个共享的持久化记忆系统 —— 一个所有 Bot 都可以读写的 Markdown 文件目录。它让 Claude 能跨对话记住信息，并在不同 Bot 之间共享知识。
+
+**工作原理：**
+- 共享目录（默认 `~/.feishu-claudecode/metamemory`）存储 Markdown 笔记
+- Claude 在正常对话中能感知这个目录，当用户要求「记住」某些内容时会自动保存
+- `/metamemory` 命令提供专门的笔记管理界面
+
+**命令示例：**
+```
+/metamemory 列出所有笔记
+/metamemory 创建一个关于项目规范的笔记
+/metamemory 搜索关于部署的笔记
+/metamemory 删除 test.md
+```
+
+**配置：** 在 `.env` 中设置 `META_MEMORY_DIR` 可自定义目录路径。默认所有 Bot 共享同一个 metamemory 目录。
 
 ---
 

@@ -11,7 +11,7 @@ interface BotHandle {
   wsClient: lark.WSClient;
 }
 
-async function startBot(botConfig: BotConfig, logger: Logger): Promise<BotHandle> {
+async function startBot(botConfig: BotConfig, logger: Logger, metaMemoryDir: string): Promise<BotHandle> {
   const botLogger = logger.child({ bot: botConfig.name });
 
   botLogger.info('Starting bot...');
@@ -39,7 +39,7 @@ async function startBot(botConfig: BotConfig, logger: Logger): Promise<BotHandle
 
   // Create sender and bridge
   const sender = new MessageSender(client, botLogger);
-  const bridge = new MessageBridge(botConfig, botLogger, sender);
+  const bridge = new MessageBridge(botConfig, botLogger, sender, metaMemoryDir);
 
   // Create event dispatcher wired to the bridge
   const dispatcher = createEventDispatcher(botConfig, botLogger, (msg) => {
@@ -73,10 +73,10 @@ async function main() {
   const appConfig = loadAppConfig();
   const logger = createLogger(appConfig.log.level);
 
-  logger.info({ botCount: appConfig.bots.length }, 'Starting feishu-claudecode bridge...');
+  logger.info({ botCount: appConfig.bots.length, metaMemoryDir: appConfig.metaMemoryDir }, 'Starting feishu-claudecode bridge...');
 
   const handles: BotHandle[] = await Promise.all(
-    appConfig.bots.map((botConfig) => startBot(botConfig, logger)),
+    appConfig.bots.map((botConfig) => startBot(botConfig, logger, appConfig.metaMemoryDir)),
   );
 
   logger.info({ bots: handles.map((h) => h.name) }, 'All bots started');
