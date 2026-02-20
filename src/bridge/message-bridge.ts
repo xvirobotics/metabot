@@ -46,7 +46,7 @@ export class MessageBridge {
     private sender: MessageSender,
   ) {
     this.executor = new ClaudeExecutor(config, logger);
-    this.sessionManager = new SessionManager(config.claude.defaultWorkingDirectory, logger);
+    this.sessionManager = new SessionManager(config.claude.defaultWorkingDirectory, logger, config.name);
     this.outputsManager = new OutputsManager(config.claude.outputsBaseDir, logger);
   }
 
@@ -261,8 +261,10 @@ export class MessageBridge {
     this.runningTasks.set(chatId, runningTask);
 
     // Setup timeout
+    let timedOut = false;
     const timeoutId = setTimeout(() => {
       this.logger.warn({ chatId, userId }, 'Task timeout, aborting');
+      timedOut = true;
       executionHandle.finish();
       abortController.abort();
     }, TASK_TIMEOUT_MS);
@@ -325,8 +327,38 @@ export class MessageBridge {
         });
       }
 
-      // Flush any pending update
+      // Flush any pending rate-limited update before sending final card
       await rateLimiter.flush();
+
+      // If the stream ended without producing a terminal state (no 'result' message),
+      // force the card into a terminal state. This happens when:
+      // - The execution was aborted (timeout, /stop)
+      // - The SDK process crashed or disconnected
+      // - AbortError was swallowed in wrapStream
+      if (lastState.status !== 'complete' && lastState.status !== 'error') {
+        if (timedOut) {
+          lastState = {
+            ...lastState,
+            status: 'error',
+            errorMessage: 'Task timed out (10 min limit)',
+          };
+        } else if (abortController.signal.aborted) {
+          lastState = {
+            ...lastState,
+            status: 'error',
+            errorMessage: 'Task was stopped',
+          };
+        } else {
+          // Stream ended normally without result — treat as complete
+          // This can happen if maxTurns is reached or SDK exits cleanly without result
+          this.logger.warn({ chatId }, 'Stream ended without result message, forcing complete state');
+          lastState = {
+            ...lastState,
+            status: lastState.responseText ? 'complete' : 'error',
+            errorMessage: lastState.responseText ? undefined : 'Claude session ended unexpectedly',
+          };
+        }
+      }
 
       // Send final card
       await this.sender.updateCard(messageId, buildCard(lastState));
