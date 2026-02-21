@@ -26,6 +26,7 @@ module.exports = {
       // Environment
       env: {
         NODE_ENV: 'production',
+        CLAUDE_MAX_TURNS: '',  // unlimited turns (override any inherited shell env)
       },
     },
   ],
