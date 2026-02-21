@@ -133,7 +133,7 @@ pm2 save                # Save current process list
 | `/reset` | Clear session, start fresh |
 | `/stop` | Abort current running task |
 | `/status` | Show current session info |
-| `/metamemory <instruction>` | Manage shared knowledge notes |
+| `/memory` | Memory document commands (list, search, status) |
 | `/help` | Show help message |
 
 ### Image Support
@@ -146,22 +146,22 @@ Supported formats: PNG, JPEG, GIF, WEBP, BMP, SVG, TIFF (max 10MB per Feishu lim
 
 ### MetaMemory (Shared Knowledge Base)
 
-MetaMemory is a shared persistent memory system — a directory of markdown files that all bots can read and write. It allows Claude to remember information across conversations and share knowledge between bots.
+MetaMemory is a document server for persistent shared memory. Claude autonomously reads/writes documents via the `memory` skill, and humans can browse via a Web UI.
 
 **How it works:**
-- A shared directory (default `~/.feishu-claudecode/metamemory`) stores markdown notes
-- Claude is aware of this directory during normal conversations and can save knowledge there when asked
-- The `/metamemory` command provides a dedicated interface for managing notes
+- A separate MetaMemory server (FastAPI + SQLite) stores documents as Markdown in a folder tree with full-text search
+- Claude uses the `memory` skill to create/read/update documents via the server API
+- The `/memory` commands provide quick access to folder listings and search results
+- A Web UI at `http://localhost:8100` lets you browse and manage documents
 
 **Commands:**
 ```
-/metamemory list all notes
-/metamemory create a note about project conventions
-/metamemory search for notes about deployment
-/metamemory delete test.md
+/memory list          — Show folder tree
+/memory search query  — Search documents
+/memory status        — Server health check
 ```
 
-**Configuration:** Set `META_MEMORY_DIR` in `.env` to customize the directory path. All bots share the same metamemory directory by default.
+**Configuration:** Set `MEMORY_SERVER_URL` in `.env` (default: `http://localhost:8100`). Run the MetaMemory server via Docker: see `xvirobotics/metamemory`.
 
 ### MCP Server Configuration
 
@@ -428,7 +428,7 @@ pm2 save                # 保存当前进程列表
 | `/reset` | 清除对话历史，重新开始 |
 | `/stop` | 中止当前正在执行的任务 |
 | `/status` | 查看当前会话状态 |
-| `/metamemory <指令>` | 管理共享知识笔记 |
+| `/memory` | 知识文档命令（list、search、status） |
 | `/help` | 显示帮助信息 |
 
 #### 使用示例
@@ -481,22 +481,22 @@ Bot：✅ Session Reset - 开始新对话
 
 ### MetaMemory（共享知识库）
 
-MetaMemory 是一个共享的持久化记忆系统 —— 一个所有 Bot 都可以读写的 Markdown 文件目录。它让 Claude 能跨对话记住信息，并在不同 Bot 之间共享知识。
+MetaMemory 是一个文档服务器，提供持久化共享记忆。Claude 通过 `memory` skill 自主读写文档，人通过 Web UI 浏览。
 
 **工作原理：**
-- 共享目录（默认 `~/.feishu-claudecode/metamemory`）存储 Markdown 笔记
-- Claude 在正常对话中能感知这个目录，当用户要求「记住」某些内容时会自动保存
-- `/metamemory` 命令提供专门的笔记管理界面
+- 独立的 MetaMemory 服务器（FastAPI + SQLite）以文件夹树形式存储 Markdown 文档，支持全文搜索
+- Claude 通过 `memory` skill 自动调用服务器 API 创建/读取/更新文档
+- `/memory` 命令提供快速查询文件夹列表和搜索结果
+- Web UI `http://localhost:8100` 支持浏览和管理文档
 
-**命令示例：**
+**命令：**
 ```
-/metamemory 列出所有笔记
-/metamemory 创建一个关于项目规范的笔记
-/metamemory 搜索关于部署的笔记
-/metamemory 删除 test.md
+/memory list          — 显示文件夹树
+/memory search 关键词  — 搜索文档
+/memory status        — 服务器健康检查
 ```
 
-**配置：** 在 `.env` 中设置 `META_MEMORY_DIR` 可自定义目录路径。默认所有 Bot 共享同一个 metamemory 目录。
+**配置：** 在 `.env` 中设置 `MEMORY_SERVER_URL`（默认 `http://localhost:8100`）。通过 Docker 运行 MetaMemory 服务器：见 `xvirobotics/metamemory`。
 
 ---
 

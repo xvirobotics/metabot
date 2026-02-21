@@ -29,7 +29,7 @@ export interface AppConfig {
   log: {
     level: string;
   };
-  metaMemoryDir: string;
+  memoryServerUrl: string;
 }
 
 function required(name: string): string {
@@ -126,16 +126,14 @@ export function loadAppConfig(): AppConfig {
     bots = [botFromEnv()];
   }
 
-  const rawMetaMemoryDir = process.env.META_MEMORY_DIR || path.join(os.homedir(), '.feishu-claudecode', 'metamemory');
-  const metaMemoryDir = path.resolve(rawMetaMemoryDir.replace(/^~(?=$|\/)/, os.homedir()));
-  fs.mkdirSync(metaMemoryDir, { recursive: true });
+  const memoryServerUrl = (process.env.MEMORY_SERVER_URL || 'http://localhost:8100').replace(/\/+$/, '');
 
   return {
     bots,
     log: {
       level: process.env.LOG_LEVEL || 'info',
     },
-    metaMemoryDir,
+    memoryServerUrl,
   };
 }
 

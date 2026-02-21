@@ -10,7 +10,6 @@ export interface ExecutorOptions {
   sessionId?: string;
   abortController: AbortController;
   outputsDir?: string;
-  metaMemoryDir?: string;
 }
 
 export type SDKMessage = {
@@ -65,7 +64,7 @@ export class ClaudeExecutor {
     private logger: Logger,
   ) {}
 
-  private buildQueryOptions(cwd: string, sessionId: string | undefined, abortController: AbortController, outputsDir?: string, metaMemoryDir?: string): Record<string, unknown> {
+  private buildQueryOptions(cwd: string, sessionId: string | undefined, abortController: AbortController, outputsDir?: string): Record<string, unknown> {
     const queryOptions: Record<string, unknown> = {
       allowedTools: this.config.claude.allowedTools,
       permissionMode: 'bypassPermissions' as const,
@@ -85,10 +84,6 @@ export class ClaudeExecutor {
 
     if (outputsDir) {
       appendSections.push(`## Output Files\nWhen producing output files for the user (images, PDFs, documents, archives, code files, etc.), copy them to: ${outputsDir}\nUse \`cp\` via the Bash tool. The bridge will automatically send files placed there to the user in Feishu.`);
-    }
-
-    if (metaMemoryDir) {
-      appendSections.push(`## MetaMemory (Shared Knowledge Base)\nA shared metamemory directory is available at: ${metaMemoryDir}\nThis directory contains markdown (.md) files that serve as persistent notes and knowledge shared across all conversations and bots.\nYou can read, write, or update files here to persist important information.\nWhen the user asks you to "remember" something or save knowledge, store it to an appropriate .md file in this directory.\nUse Read, Write, Edit, Glob, Grep tools to interact with files there.`);
     }
 
     if (appendSections.length > 0) {
@@ -119,7 +114,7 @@ export class ClaudeExecutor {
   }
 
   startExecution(options: ExecutorOptions): ExecutionHandle {
-    const { prompt, cwd, sessionId, abortController, outputsDir, metaMemoryDir } = options;
+    const { prompt, cwd, sessionId, abortController, outputsDir } = options;
 
     this.logger.info({ cwd, hasSession: !!sessionId, outputsDir }, 'Starting Claude execution (multi-turn)');
 
@@ -137,7 +132,7 @@ export class ClaudeExecutor {
     };
     inputQueue.enqueue(initialMessage);
 
-    const queryOptions = this.buildQueryOptions(cwd, sessionId, abortController, outputsDir, metaMemoryDir);
+    const queryOptions = this.buildQueryOptions(cwd, sessionId, abortController, outputsDir);
 
     const stream = query({
       prompt: inputQueue,
@@ -164,91 +159,6 @@ export class ClaudeExecutor {
       stream: wrapStream(),
       sendAnswer: (toolUseId: string, sid: string, answerText: string) => {
         logger.info({ toolUseId }, 'Sending answer to Claude');
-        const answerMessage: SDKUserMessage = {
-          type: 'user',
-          message: {
-            role: 'user' as const,
-            content: [
-              {
-                type: 'tool_result',
-                tool_use_id: toolUseId,
-                content: answerText,
-              },
-            ],
-          },
-          parent_tool_use_id: null,
-          session_id: sid,
-        };
-        inputQueue.enqueue(answerMessage);
-      },
-      finish: () => {
-        inputQueue.finish();
-      },
-    };
-  }
-
-  startMetaMemoryExecution(prompt: string, metaMemoryDir: string, abortController: AbortController): ExecutionHandle {
-    this.logger.info({ metaMemoryDir }, 'Starting metamemory execution');
-
-    const inputQueue = new AsyncQueue<SDKUserMessage>();
-
-    const initialMessage: SDKUserMessage = {
-      type: 'user',
-      message: {
-        role: 'user' as const,
-        content: prompt,
-      },
-      parent_tool_use_id: null,
-      session_id: '',
-    };
-    inputQueue.enqueue(initialMessage);
-
-    const queryOptions: Record<string, unknown> = {
-      allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash'],
-      permissionMode: 'bypassPermissions' as const,
-      allowDangerouslySkipPermissions: true,
-      cwd: metaMemoryDir,
-      abortController,
-      includePartialMessages: true,
-      maxTurns: 10,
-      maxBudgetUsd: 0.10,
-      pathToClaudeCodeExecutable: process.env.CLAUDE_EXECUTABLE_PATH || '/usr/local/bin/claude',
-      systemPrompt: {
-        type: 'preset',
-        preset: 'claude_code',
-        append: `\n\n## MetaMemory Operations\nYou are managing a shared metamemory directory at: ${metaMemoryDir}\nThis directory contains markdown (.md) files that serve as persistent notes and knowledge shared across all conversations and bots.\nYour job is to help the user create, read, update, list, or delete notes in this directory.\nUse Read, Write, Edit, Glob, Grep, Bash tools to manage files here.\nKeep notes well-organized with clear filenames and structured markdown content.`,
-      },
-    };
-
-    if (this.config.claude.model) {
-      queryOptions.model = this.config.claude.model;
-    }
-
-    const stream = query({
-      prompt: inputQueue,
-      options: queryOptions as any,
-    });
-
-    const logger = this.logger;
-
-    async function* wrapStream(): AsyncGenerator<SDKMessage> {
-      try {
-        for await (const message of stream) {
-          yield message as SDKMessage;
-        }
-      } catch (err: any) {
-        if (err.name === 'AbortError' || abortController.signal.aborted) {
-          logger.info('Metamemory execution aborted');
-          return;
-        }
-        throw err;
-      }
-    }
-
-    return {
-      stream: wrapStream(),
-      sendAnswer: (toolUseId: string, sid: string, answerText: string) => {
-        logger.info({ toolUseId }, 'Sending answer to Claude (metamemory)');
         const answerMessage: SDKUserMessage = {
           type: 'user',
           message: {

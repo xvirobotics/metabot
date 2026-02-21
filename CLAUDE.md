@@ -31,7 +31,8 @@ Feishu WSClient → EventHandler (auth, parse, @mention filter) → MessageBridg
 - **`src/index.ts`** — Entrypoint. Creates Feishu WS client, fetches bot info for @mention detection, wires up the event dispatcher and bridge, handles graceful shutdown.
 - **`src/config.ts`** — Loads config. `BotConfig` is the per-bot type; `AppConfig` wraps `{ bots, log }`. `loadAppConfig()` reads `BOTS_CONFIG` JSON file or falls back to single-bot mode from env vars.
 - **`src/feishu/event-handler.ts`** — Registers `im.message.receive_v1` on the Lark `EventDispatcher`. Handles auth checks, text/image parsing, @mention stripping, group chat filtering (only responds when @mentioned). Exports `IncomingMessage` type.
-- **`src/bridge/message-bridge.ts`** — Core orchestrator. Routes commands (`/reset`, `/stop`, `/status`, `/help`), manages running tasks per chat (one task at a time per `chatId`), executes Claude queries with streaming card updates, handles image input/output, enforces 10-minute timeout.
+- **`src/bridge/message-bridge.ts`** — Core orchestrator. Routes commands (`/reset`, `/stop`, `/status`, `/help`, `/memory`), manages running tasks per chat (one task at a time per `chatId`), executes Claude queries with streaming card updates, handles image input/output, enforces 1-hour timeout.
+- **`src/memory/memory-client.ts`** — Lightweight HTTP client for the MetaMemory server. Used by `/memory` commands (list, search, status) for quick Feishu responses without spawning Claude.
 - **`src/claude/executor.ts`** — Wraps `query()` from the Agent SDK as an async generator yielding `SDKMessage`. Configures permissionMode, allowedTools, MCP settings, session resume.
 - **`src/claude/stream-processor.ts`** — Transforms the raw SDK message stream into `CardState` objects for display. Tracks tool calls, response text, session ID, cost/duration. Also extracts image file paths from tool outputs.
 - **`src/claude/session-manager.ts`** — In-memory sessions keyed by `chatId`. Each session has a fixed working directory (from bot config) and Claude session ID. Sessions expire after 24 hours.
@@ -78,6 +79,16 @@ Per-bot config fields (JSON array entries):
 When `BOTS_CONFIG` is set, `FEISHU_APP_ID` / `FEISHU_APP_SECRET` env vars are ignored. Other env vars (`CLAUDE_MAX_TURNS`, `LOG_LEVEL`, etc.) still serve as defaults for any bot field not specified in JSON.
 
 Sessions are isolated per `chatId` with no collision between bots since each bot has its own Feishu app and receives only its own messages.
+
+### MetaMemory Integration
+
+Knowledge persistence is handled by an external **MetaMemory server** (FastAPI + SQLite). The server stores documents as Markdown in a folder tree with full-text search (FTS5).
+
+- **Server URL**: Configured via `MEMORY_SERVER_URL` env var (default: `http://localhost:8100`)
+- **Claude Code Skill**: Claude autonomously reads/writes memory documents via the `memory` skill (installed at `~/.claude/skills/memory/SKILL.md`). When users say "remember this" or Claude wants to persist knowledge, it calls the memory API via curl.
+- **Feishu commands**: `/memory list`, `/memory search <query>`, `/memory status` — quick queries via `MemoryClient` without spawning Claude.
+- **Web UI**: Browse documents at `http://localhost:8100` — folder tree, markdown rendering, search.
+- **Server repo**: `xvirobotics/metamemory` — independent project with Docker deployment.
 
 ## Prerequisites
 
