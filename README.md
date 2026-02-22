@@ -6,10 +6,6 @@
 
 [English](#english) | [中文](#中文)
 
-<p align="center">
-  <img src="resources/feishu_claudecode.png" width="100%" />
-</p>
-
 ---
 
 <a id="english"></a>
