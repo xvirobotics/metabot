@@ -444,7 +444,10 @@ fi
 # ============================================================================
 step "Phase 6: Installing skills"
 
-SKILLS_SRC="$HOME/.claude/skills"
+# Skills source: bundled in repo first, fallback to ~/.claude/skills
+SKILLS_REPO="$METABOT_HOME/skills"
+SKILLS_USER="$HOME/.claude/skills"
+
 if [[ "$SKIP_CONFIG" == "false" ]]; then
   SKILLS_DEST="$WORK_DIR/.claude/skills"
 else
@@ -467,12 +470,29 @@ fi
 
 if [[ -n "${SKILLS_DEST:-}" ]]; then
   for SKILL in metaskill metamemory; do
-    if [[ -d "$SKILLS_SRC/$SKILL" ]]; then
+    # Try bundled repo skills first, then user-level
+    SKILL_SRC=""
+    if [[ -d "$SKILLS_REPO/$SKILL" ]]; then
+      SKILL_SRC="$SKILLS_REPO/$SKILL"
+    elif [[ -d "$SKILLS_USER/$SKILL" ]]; then
+      SKILL_SRC="$SKILLS_USER/$SKILL"
+    fi
+
+    if [[ -n "$SKILL_SRC" ]]; then
       mkdir -p "$SKILLS_DEST/$SKILL"
-      cp -r "$SKILLS_SRC/$SKILL/." "$SKILLS_DEST/$SKILL/"
-      success "Installed $SKILL to $SKILLS_DEST/$SKILL"
+      cp -r "$SKILL_SRC/." "$SKILLS_DEST/$SKILL/"
+      success "Installed $SKILL → $SKILLS_DEST/$SKILL"
     else
-      warn "Skill $SKILL not found at $SKILLS_SRC/$SKILL, skipping"
+      warn "Skill $SKILL not found, skipping"
+    fi
+  done
+
+  # Also install to user-level ~/.claude/skills if not already there
+  for SKILL in metaskill metamemory; do
+    if [[ -d "$SKILLS_REPO/$SKILL" ]] && [[ ! -d "$SKILLS_USER/$SKILL" ]]; then
+      mkdir -p "$SKILLS_USER/$SKILL"
+      cp -r "$SKILLS_REPO/$SKILL/." "$SKILLS_USER/$SKILL/"
+      success "Installed $SKILL → $SKILLS_USER/$SKILL (user-level)"
     fi
   done
 else
