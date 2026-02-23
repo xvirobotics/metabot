@@ -261,6 +261,12 @@ export function loadAppConfig(): AppConfig {
   const apiPort = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : 9100;
   const apiSecret = process.env.API_SECRET || undefined;
 
+  // Expose as METABOT_* env vars so Claude Code skills can read them via shell expansion
+  process.env.METABOT_API_PORT = String(apiPort);
+  if (apiSecret) {
+    process.env.METABOT_API_SECRET = apiSecret;
+  }
+
   const memoryEnabled = process.env.MEMORY_ENABLED !== 'false';
   const memoryPort = process.env.MEMORY_PORT ? parseInt(process.env.MEMORY_PORT, 10) : 8100;
   const memoryDatabaseDir = process.env.MEMORY_DATABASE_DIR || './data';

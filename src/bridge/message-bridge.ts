@@ -48,8 +48,6 @@ export class MessageBridge {
   private outputsManager: OutputsManager;
   private memoryClient: MemoryClient;
   private runningTasks = new Map<string, RunningTask>(); // keyed by chatId
-  private apiPort: number | undefined;
-  private apiSecret: string | undefined;
 
   constructor(
     private config: BotConfigBase,
@@ -64,13 +62,6 @@ export class MessageBridge {
     this.memoryClient = new MemoryClient(memoryServerUrl, logger, memorySecret);
   }
 
-  setApiPort(port: number): void {
-    this.apiPort = port;
-  }
-
-  setApiSecret(secret: string | undefined): void {
-    this.apiSecret = secret;
-  }
 
   isBusy(chatId: string): boolean {
     return this.runningTasks.has(chatId);
@@ -298,10 +289,9 @@ export class MessageBridge {
       return;
     }
 
-    // Build apiContext for system prompt injection
-    const apiContext = this.apiPort
-      ? { port: this.apiPort, botName: this.config.name, chatId, secret: this.apiSecret }
-      : undefined;
+    // Build apiContext for system prompt injection (botName + chatId only;
+    // port and secret are already in METABOT_* env vars set by config.ts)
+    const apiContext = { botName: this.config.name, chatId };
 
     // Start multi-turn execution
     const executionHandle = this.executor.startExecution({
@@ -497,10 +487,9 @@ export class MessageBridge {
       messageId = await this.sender.sendCard(chatId, initialState);
     }
 
-    // Build apiContext for system prompt injection
-    const apiContext = this.apiPort
-      ? { port: this.apiPort, botName: this.config.name, chatId, secret: this.apiSecret }
-      : undefined;
+    // Build apiContext for system prompt injection (botName + chatId only;
+    // port and secret are already in METABOT_* env vars set by config.ts)
+    const apiContext = { botName: this.config.name, chatId };
 
     // Start execution
     const executionHandle = this.executor.startExecution({

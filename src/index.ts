@@ -106,10 +106,8 @@ async function main() {
     ? await Promise.all(appConfig.telegramBots.map((bot) => startTelegramBot(bot, logger, appConfig.memoryServerUrl, appConfig.memory.secret || undefined)))
     : [];
 
-  // Register all bots in the registry and set API port/secret on bridges
+  // Register all bots in the registry
   for (const handle of feishuHandles) {
-    handle.bridge.setApiPort(appConfig.api.port);
-    handle.bridge.setApiSecret(appConfig.api.secret);
     registry.register({
       name: handle.name,
       platform: 'feishu',
@@ -120,8 +118,6 @@ async function main() {
   }
 
   for (const handle of telegramHandles) {
-    handle.bridge.setApiPort(appConfig.api.port);
-    handle.bridge.setApiSecret(appConfig.api.secret);
     registry.register({
       name: handle.name,
       platform: 'telegram',
