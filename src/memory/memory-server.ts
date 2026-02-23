@@ -222,6 +222,18 @@ export function startMemoryServer(options: MemoryServerOptions): { server: http.
     }
   });
 
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      logger.warn({ port }, 'MetaMemory port already in use, retrying in 3s (old process may still be running)');
+      setTimeout(() => {
+        server.close();
+        server.listen(port, '0.0.0.0');
+      }, 3000);
+    } else {
+      logger.error({ err, port }, 'MetaMemory server error');
+    }
+  });
+
   server.listen(port, '0.0.0.0', () => {
     logger.info({ port }, 'MetaMemory server started');
   });

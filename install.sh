@@ -536,6 +536,16 @@ if pm2 describe metamemory &>/dev/null 2>&1; then
   success "Old MetaMemory process removed"
 fi
 
+# Kill any process still occupying port 8100 (e.g. old Python uvicorn)
+if command -v lsof &>/dev/null; then
+  OLD_PID=$(lsof -ti :8100 2>/dev/null || true)
+  if [[ -n "$OLD_PID" ]]; then
+    info "Killing old process on port 8100 (PID: $OLD_PID)..."
+    kill "$OLD_PID" 2>/dev/null || true
+    sleep 1
+  fi
+fi
+
 METAMEMORY_INSTALLED=true
 success "MetaMemory will start automatically with MetaBot on port 8100"
 
