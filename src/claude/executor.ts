@@ -95,47 +95,13 @@ export class ClaudeExecutor {
     }
 
     if (apiContext) {
-      const authHeader = apiContext.secret
-        ? `  -H 'Authorization: Bearer ${apiContext.secret}' \\\n`
-        : '';
-      const authNote = apiContext.secret
-        ? `\nAll requests require: Authorization: Bearer <secret>`
-        : '';
-
-      appendSections.push([
-        `## MetaBot API`,
-        `You are running as bot "${apiContext.botName}" in chat "${apiContext.chatId}".`,
-        `Available at http://localhost:${apiContext.port}${authNote}`,
-        ``,
-        `POST /api/tasks — delegate a task to another bot (synchronous, returns result)`,
-        `  Body: {"botName":"<name>","chatId":"<chatId>","prompt":"<prompt>","sendCards":false}`,
-        `POST /api/schedule — schedule a future task`,
-        `  Body: {"botName":"<name>","chatId":"<chatId>","prompt":"<prompt>","delaySeconds":<n>,"label":"<optional>"}`,
-        `GET /api/schedule — list pending scheduled tasks`,
-        `PATCH /api/schedule/<id> — update a pending task (prompt, delaySeconds, label, sendCards)`,
-        `DELETE /api/schedule/<id> — cancel a scheduled task`,
-        `GET /api/bots — discover available bots`,
-        `GET /api/health — service health check`,
-        ``,
-        `### Bot Management (Self-Replication)`,
-        `POST /api/bots — create a new bot (auto-activates via PM2 restart)`,
-        `  Feishu: {"platform":"feishu","name":"<name>","feishuAppId":"...","feishuAppSecret":"...","defaultWorkingDirectory":"/path","installSkills":true}`,
-        `  Telegram: {"platform":"telegram","name":"<name>","telegramBotToken":"...","defaultWorkingDirectory":"/path","installSkills":true}`,
-        `GET /api/bots/<name> — get bot details`,
-        `DELETE /api/bots/<name> — remove a bot`,
-        ``,
-        `When asked to create a bot:`,
-        `1. Ask user for platform + credentials + project name + working directory`,
-        `2. POST /api/bots with installSkills:true`,
-        `3. Report success — new bot activates within ~3 seconds via PM2 file-watch`,
-        ``,
-        `### Self-Scheduling Example`,
-        `\`\`\`bash`,
-        `curl -s -X POST http://localhost:${apiContext.port}/api/schedule \\`,
-        `${authHeader}  -H 'Content-Type: application/json' \\`,
-        `  -d '{"botName":"${apiContext.botName}","chatId":"${apiContext.chatId}","prompt":"check on experiment results","delaySeconds":3600}'`,
-        `\`\`\``,
-      ].join('\n'));
+      // Set env vars for the metabot-api skill to pick up via shell expansion
+      process.env.METABOT_API_PORT = String(apiContext.port);
+      process.env.METABOT_BOT_NAME = apiContext.botName;
+      process.env.METABOT_CHAT_ID = apiContext.chatId;
+      if (apiContext.secret) {
+        process.env.METABOT_API_SECRET = apiContext.secret;
+      }
     }
 
     if (appendSections.length > 0) {

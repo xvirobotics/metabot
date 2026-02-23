@@ -57,7 +57,7 @@ We built MetaBot to run [XVI Robotics](https://github.com/xvirobotics) as an **a
 | **MetaSkill** | Agent factory. `/metaskill ios app` generates a complete `.claude/` agent team (tech-lead + specialists + code-reviewer) after researching best practices. |
 | **MetaMemory** | Embedded SQLite knowledge store with full-text search and Web UI. Agents read/write Markdown documents across sessions. Shared by all agents. |
 | **IM Bridge** | Chat with any agent from Feishu/Lark or Telegram (including mobile). Streaming cards with color-coded status and tool call tracking. |
-| **Agent Bus** | REST API on port 9100. Agents delegate tasks to each other via `curl`. Create/remove bots at runtime. |
+| **Agent Bus** | REST API on port 9100. Agents delegate tasks to each other via `curl`. Create/remove bots at runtime. Exposed as the `/metabot-api` skill — loaded on demand, not injected into every prompt. |
 | **Task Scheduler** | Agents schedule future work — "check back in 2 hours". Persists across restarts, auto-retries when busy. |
 
 ## Install
@@ -207,6 +207,7 @@ MetaBot runs Claude Code in `bypassPermissions` mode — no interactive approval
 | `/memory search <query>` | Search knowledge base |
 | `/help` | Show help |
 | `/metaskill ...` | Generate agent teams, agents, or skills |
+| `/metabot-api` | Agent bus, scheduling, and bot management API docs (loaded on demand) |
 | `/anything` | Any unrecognized command is forwarded to Claude Code as a skill |
 
 ## API Reference

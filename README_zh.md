@@ -57,7 +57,7 @@ MetaBot 解放了它。给每个 Agent 一个 Claude Code 大脑、持久化的�
 | **MetaSkill** | Agent 工厂。`/metaskill ios app` 调研最佳实践后生成完整的 `.claude/` Agent 团队（tech-lead + 专家 + reviewer）。 |
 | **MetaMemory** | 内嵌 SQLite 知识库，全文搜索，Web UI。Agent 跨会话读写 Markdown 文档。所有 Agent 共享。 |
 | **IM Bridge** | 飞书或 Telegram（含手机端）与任意 Agent 对话。带颜色状态的流式卡片 + 工具调用追踪。 |
-| **Agent 总线** | 9100 端口 REST API。Agent 通过 `curl` 互相委派任务。运行时创建/删除 Bot。 |
+| **Agent 总线** | 9100 端口 REST API。Agent 通过 `curl` 互相委派任务。运行时创建/删除 Bot。以 `/metabot-api` skill 形式按需加载，不注入每次对话。 |
 | **定时任务调度器** | Agent 安排未来的工作 —— "2小时后检查一下"。跨重启持久化，忙时自动重试。 |
 
 ## 安装
@@ -207,6 +207,7 @@ MetaBot 以 `bypassPermissions` 模式运行 Claude Code — 无交互式确认�
 | `/memory search 关键词` | 搜索知识库 |
 | `/help` | 帮助 |
 | `/metaskill ...` | 生成 Agent 团队、Agent 或 Skill |
+| `/metabot-api` | Agent 总线、定时任务、Bot 管理 API 文档（按需加载） |
 | `/任意命令` | 非内置命令自动转发给 Claude Code |
 
 ## API 参考
