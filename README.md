@@ -10,7 +10,7 @@
 
 ---
 
-<!-- TODO: add demo GIF here -->
+![MetaBot Architecture](resources/metabot.png)
 
 ## Why
 

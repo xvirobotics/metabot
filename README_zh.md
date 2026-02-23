@@ -10,7 +10,7 @@
 
 ---
 
-<!-- TODO: 之后加 demo GIF -->
+![MetaBot 架构图](resources/metabot.png)
 
 ## 为什么做 MetaBot
 
