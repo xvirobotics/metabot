@@ -226,7 +226,19 @@ export class MessageBridge {
       }
 
       default:
-        await this.sender.sendTextNotice(chatId, '❓ Unknown Command', `Unknown command: \`${cmd}\`\nUse \`/help\` for available commands.`, 'orange');
+        // Unrecognized /xxx commands — pass through to Claude as regular text
+        // so that Claude Code skills (e.g. /metaskill, /metamemory) can be triggered
+        if (this.runningTasks.has(chatId)) {
+          await this.sender.sendTextNotice(
+            chatId,
+            '⏳ Task In Progress',
+            'You have a running task. Use `/stop` to abort it, or wait for it to finish.',
+            'orange',
+          );
+          return;
+        }
+        await this.executeQuery(msg);
+        return;
     }
   }
 
