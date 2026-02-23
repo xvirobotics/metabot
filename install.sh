@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MetaBot Genesis Installer
+# MetaBot Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh | bash
 set -euo pipefail
 
@@ -34,7 +34,7 @@ banner() {
   echo ""
   echo -e "${CYAN}${BOLD}"
   echo "  ╔══════════════════════════════════════════╗"
-  echo "  ║          MetaBot Genesis Installer       ║"
+  echo "  ║            MetaBot Installer             ║"
   echo "  ║     一生二，二生三，三生万物               ║"
   echo "  ╚══════════════════════════════════════════╝"
   echo -e "${NC}"
@@ -182,12 +182,9 @@ if [[ -d "$METABOT_HOME/.git" ]]; then
     export METABOT_REEXEC=1
     exec bash "$METABOT_HOME/install.sh"
   fi
-  # Ensure submodules are initialized and up-to-date
-  info "Updating submodules..."
-  git submodule update --init --recursive
 else
   info "Cloning MetaBot..."
-  git clone --recursive "$METABOT_REPO" "$METABOT_HOME"
+  git clone "$METABOT_REPO" "$METABOT_HOME"
   cd "$METABOT_HOME"
 fi
 success "MetaBot code ready at ${METABOT_HOME}"
@@ -355,7 +352,7 @@ API_TIMEOUT_MS=600000"
   # ------ 4d: Bot name + auto-generated settings ------
   echo ""
   echo -e "${BOLD}Bot Name:${NC}"
-  prompt_input BOT_NAME "Name for your genesis bot" "genesis"
+  prompt_input BOT_NAME "Name for your bot" "metabot"
 
   # Auto-generate API secret
   API_SECRET="$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n' | head -c 64)"
@@ -451,156 +448,96 @@ if [[ "$SKIP_CONFIG" == "false" ]]; then
 fi
 
 # ============================================================================
-# Phase 6: Install skills (delegate to each submodule's install.sh)
+# Phase 6: Install skills + workspace setup
 # ============================================================================
-step "Phase 6: Installing skills"
+step "Phase 6: Installing skills and setting up workspace"
 
 SKILLS_DIR="$HOME/.claude/skills"
 mkdir -p "$SKILLS_DIR"
 
-# Install metaskill — delegates to its own install.sh
-if [[ -f "$METABOT_HOME/submodules/metaskill/install.sh" ]]; then
-  info "Installing metaskill skill..."
-  bash "$METABOT_HOME/submodules/metaskill/install.sh"
-  success "metaskill skill installed → $SKILLS_DIR/metaskill"
-else
-  warn "metaskill submodule not found, skipping"
-fi
+# Install metaskill (bundled in src/skills/metaskill/)
+info "Installing metaskill skill..."
+mkdir -p "$SKILLS_DIR/metaskill/flows"
+cp "$METABOT_HOME/src/skills/metaskill/SKILL.md" "$SKILLS_DIR/metaskill/SKILL.md"
+cp "$METABOT_HOME/src/skills/metaskill/flows/team.md" "$SKILLS_DIR/metaskill/flows/team.md"
+cp "$METABOT_HOME/src/skills/metaskill/flows/agent.md" "$SKILLS_DIR/metaskill/flows/agent.md"
+cp "$METABOT_HOME/src/skills/metaskill/flows/skill.md" "$SKILLS_DIR/metaskill/flows/skill.md"
+success "metaskill skill installed → $SKILLS_DIR/metaskill"
 
-# Install metamemory skill — delegates to its own install.sh
-if [[ -f "$METABOT_HOME/submodules/metamemory/install.sh" ]]; then
-  info "Installing metamemory skill..."
-  bash "$METABOT_HOME/submodules/metamemory/install.sh"
-  success "metamemory skill installed → $SKILLS_DIR/metamemory"
-else
-  warn "metamemory submodule not found, skipping"
+# Install metamemory skill (bundled in src/memory/skill/)
+info "Installing metamemory skill..."
+mkdir -p "$SKILLS_DIR/metamemory"
+cp "$METABOT_HOME/src/memory/skill/SKILL.md" "$SKILLS_DIR/metamemory/SKILL.md"
+# Clean up old skill location if it exists
+if [[ -d "$HOME/.claude/skills/memory" ]]; then
+  rm -rf "$HOME/.claude/skills/memory"
 fi
+success "metamemory skill installed → $SKILLS_DIR/metamemory"
 
-# Determine working directory for skill deployment
+# Determine working directory
 if [[ "$SKIP_CONFIG" == "false" ]]; then
-  SKILLS_DEST="$WORK_DIR/.claude/skills"
+  DEPLOY_WORK_DIR="$WORK_DIR"
 else
   if [[ -f "$METABOT_HOME/bots.json" ]]; then
-    WORK_DIR=$(node -e "
+    DEPLOY_WORK_DIR=$(node -e "
       const fs = require('fs');
       const cfg = JSON.parse(fs.readFileSync('$METABOT_HOME/bots.json','utf-8'));
       const bots = [...(cfg.feishuBots||[]),...(cfg.telegramBots||[])];
       if (bots[0]) console.log(bots[0].defaultWorkingDirectory);
     " 2>/dev/null || echo "")
-    if [[ -n "$WORK_DIR" ]]; then
-      SKILLS_DEST="$WORK_DIR/.claude/skills"
-    else
-      SKILLS_DEST=""
-    fi
   else
-    SKILLS_DEST=""
+    DEPLOY_WORK_DIR=""
   fi
 fi
 
-# Copy skills to bot working directory
-if [[ -n "${SKILLS_DEST:-}" ]]; then
+# Deploy skills + CLAUDE.md to bot working directory
+if [[ -n "${DEPLOY_WORK_DIR:-}" ]]; then
+  SKILLS_DEST="$DEPLOY_WORK_DIR/.claude/skills"
+
+  # Copy skills
   for SKILL in metaskill metamemory; do
     if [[ -d "$SKILLS_DIR/$SKILL" ]]; then
       mkdir -p "$SKILLS_DEST/$SKILL"
       cp -r "$SKILLS_DIR/$SKILL/." "$SKILLS_DEST/$SKILL/"
       success "Deployed $SKILL → $SKILLS_DEST/$SKILL"
-    else
-      warn "Skill $SKILL not found in $SKILLS_DIR, skipping workdir deploy"
     fi
   done
-  # Also install metamemory to bot workdir via its install.sh (handles cleanup)
-  if [[ -f "$METABOT_HOME/submodules/metamemory/install.sh" ]]; then
-    bash "$METABOT_HOME/submodules/metamemory/install.sh" "$SKILLS_DEST/metamemory"
+
+  # Deploy CLAUDE.md to working directory
+  if [[ -f "$METABOT_HOME/src/workspace/CLAUDE.md" ]]; then
+    cp "$METABOT_HOME/src/workspace/CLAUDE.md" "$DEPLOY_WORK_DIR/CLAUDE.md"
+    success "Deployed CLAUDE.md → $DEPLOY_WORK_DIR/CLAUDE.md"
   fi
 else
-  warn "Could not determine working directory, skipping skill deployment to workdir"
+  warn "Could not determine working directory, skipping workspace deployment"
 fi
 
 # ============================================================================
-# Phase 7: MetaMemory Server (optional)
+# Phase 7: MetaMemory (embedded in MetaBot)
 # ============================================================================
-step "Phase 7: MetaMemory Server"
+step "Phase 7: MetaMemory"
 
 METAMEMORY_INSTALLED=false
-METAMEMORY_HOME="$METABOT_HOME/submodules/metamemory"
 
-if prompt_yn "Install MetaMemory server (knowledge persistence)?"; then
+info "MetaMemory is embedded in MetaBot (no separate server needed)."
+mkdir -p "${METABOT_HOME}/data"
 
-  # 7a. Check Python 3.8+
-  if command -v python3 &>/dev/null; then
-    PY_VER="$(python3 --version 2>&1 | sed 's/Python //')"
-    PY_MAJOR="$(echo "$PY_VER" | cut -d. -f1)"
-    PY_MINOR="$(echo "$PY_VER" | cut -d. -f2)"
-    if [[ "$PY_MAJOR" -ge 3 && "$PY_MINOR" -ge 8 ]]; then
-      success "Python found: ${PY_VER}"
-    else
-      error "Python ${PY_VER} found, but 3.8+ is required."
-      warn "Skipping MetaMemory installation."
-    fi
-  else
-    error "Python 3 not found."
-    echo "  Install: https://www.python.org/downloads/ or use your package manager"
-    warn "Skipping MetaMemory installation."
-  fi
-
-  # Only continue if Python 3.8+ is available
-  if command -v python3 &>/dev/null; then
-    PY_MAJOR="$(python3 -c 'import sys; print(sys.version_info.major)')"
-    PY_MINOR="$(python3 -c 'import sys; print(sys.version_info.minor)')"
-    if [[ "$PY_MAJOR" -ge 3 && "$PY_MINOR" -ge 8 ]]; then
-
-      # 7b. Check submodule is present
-      if [[ ! -d "$METAMEMORY_HOME/server" ]]; then
-        warn "MetaMemory submodule not found at $METAMEMORY_HOME"
-        warn "Run: git submodule update --init --recursive"
-      else
-
-        # 7c. Create venv + pip install
-        cd "$METAMEMORY_HOME"
-        if [[ ! -d "venv" ]]; then
-          info "Creating Python virtual environment..."
-          python3 -m venv venv
-        fi
-        info "Installing Python dependencies..."
-        source venv/bin/activate
-        if [[ -f "server/requirements.txt" ]]; then
-          pip install -r server/requirements.txt -q
-        elif [[ -f "requirements.txt" ]]; then
-          pip install -r requirements.txt -q
-        else
-          warn "No requirements.txt found, skipping pip install"
-        fi
-        deactivate
-        success "MetaMemory dependencies installed"
-
-        # 7d. Start MetaMemory via PM2
-        if pm2 describe metamemory &>/dev/null 2>&1; then
-          info "MetaMemory already in PM2, deleting stale process..."
-          pm2 delete metamemory 2>/dev/null || true
-        fi
-        info "Starting MetaMemory with PM2..."
-        pm2 start "$METAMEMORY_HOME/venv/bin/python" \
-          --name metamemory \
-          --cwd "$METAMEMORY_HOME/server" \
-          -- -m uvicorn app.main:app --host 0.0.0.0 --port 8100
-
-        # 7e. Health check
-        sleep 3
-        if curl -sf http://localhost:8100/api/health &>/dev/null || curl -sf http://localhost:8100/health &>/dev/null; then
-          success "MetaMemory server is running on port 8100"
-          METAMEMORY_INSTALLED=true
-        else
-          warn "MetaMemory started but health check failed. Check: pm2 logs metamemory"
-          METAMEMORY_INSTALLED=true
-        fi
-
-      fi
-    fi
-  fi
-
-else
-  info "Skipping MetaMemory installation"
+# Migrate existing database from standalone Python MetaMemory if found
+if [[ -f "$HOME/.metamemory-data/metamemory.db" && ! -f "$METABOT_HOME/data/metamemory.db" ]]; then
+  info "Migrating existing MetaMemory database..."
+  cp "$HOME/.metamemory-data/metamemory.db" "$METABOT_HOME/data/"
+  success "Database migrated from ~/.metamemory-data/"
 fi
+
+# Stop old standalone MetaMemory PM2 process if running
+if pm2 describe metamemory &>/dev/null 2>&1; then
+  info "Stopping old standalone MetaMemory PM2 process..."
+  pm2 delete metamemory 2>/dev/null || true
+  success "Old MetaMemory process removed"
+fi
+
+METAMEMORY_INSTALLED=true
+success "MetaMemory will start automatically with MetaBot on port 8100"
 
 # ============================================================================
 # Phase 8: Build + Start MetaBot with PM2
@@ -629,7 +566,7 @@ success "MetaBot is running!"
 echo ""
 echo -e "${GREEN}${BOLD}"
 echo "  ╔══════════════════════════════════════════╗"
-echo "  ║       MetaBot Genesis — Ready!           ║"
+echo "  ║           MetaBot — Ready!               ║"
 echo "  ╚══════════════════════════════════════════╝"
 echo -e "${NC}"
 echo ""
@@ -652,8 +589,7 @@ echo "    pm2 logs metabot          # View MetaBot logs"
 echo "    pm2 restart metabot       # Restart MetaBot"
 echo "    pm2 stop metabot          # Stop MetaBot"
 if [[ "$METAMEMORY_INSTALLED" == "true" ]]; then
-  echo "    pm2 logs metamemory       # View MetaMemory logs"
-  echo "    pm2 restart metamemory    # Restart MetaMemory"
+  echo "    # MetaMemory logs are included in metabot logs (embedded server)"
 fi
 echo ""
 if [[ "${SKIP_CONFIG}" == "false" ]]; then

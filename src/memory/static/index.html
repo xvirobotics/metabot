@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Memory</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <button class="sidebar-toggle" id="sidebarToggle" title="Toggle sidebar">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+        <div class="logo" onclick="navigateTo('#/folder/root')">
+          <span class="logo-icon">🧠</span>
+          <span class="logo-text">Memory</span>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="search-box">
+          <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input type="text" id="searchInput" placeholder="Search..." />
+        </div>
+      </div>
+    </header>
+
+    <!-- Main layout -->
+    <div class="main">
+      <!-- Sidebar Overlay (mobile) -->
+      <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+      <!-- Sidebar -->
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <span>Folders</span>
+          <button class="btn-icon-round" id="newFolderBtn" title="New Folder">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+        <div class="folder-tree" id="folderTree"></div>
+      </aside>
+
+      <!-- Content -->
+      <main class="content" id="content">
+        <!-- Breadcrumb -->
+        <div class="breadcrumb" id="breadcrumb"></div>
+
+        <!-- Document List View -->
+        <div id="docListView" class="view">
+          <div class="view-header">
+            <h2 id="viewTitle">Documents</h2>
+            <button class="btn btn-primary" id="newDocBtn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+              <span>New</span>
+            </button>
+          </div>
+          <div class="doc-list" id="docList"></div>
+        </div>
+
+        <!-- Document View -->
+        <div id="docView" class="view hidden">
+          <div class="doc-header">
+            <div class="doc-meta">
+              <h2 id="docTitle"></h2>
+              <div class="doc-info">
+                <span id="docTags"></span>
+                <span id="docAuthor"></span>
+                <span id="docUpdated"></span>
+              </div>
+            </div>
+            <div class="doc-actions">
+              <button class="btn" id="backBtn" title="Back">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+                <span>Back</span>
+              </button>
+              <button class="btn" id="editDocBtn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                <span>Edit</span>
+              </button>
+              <button class="btn btn-danger" id="deleteDocBtn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                <span>Delete</span>
+              </button>
+            </div>
+          </div>
+          <div class="doc-content markdown-body" id="docContent"></div>
+        </div>
+
+        <!-- Edit View -->
+        <div id="editView" class="view hidden">
+          <div class="edit-header">
+            <h2 id="editViewTitle">New Document</h2>
+          </div>
+          <div class="edit-form">
+            <input type="text" id="editTitle" placeholder="Document title" class="input" />
+            <input type="text" id="editTags" placeholder="Tags (comma-separated)" class="input" />
+            <textarea id="editContent" placeholder="Write markdown content..." class="textarea"></textarea>
+            <div class="edit-actions">
+              <button class="btn btn-primary" id="saveDocBtn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                Save
+              </button>
+              <button class="btn" id="cancelEditBtn">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Search View -->
+        <div id="searchView" class="view hidden">
+          <div class="view-header">
+            <h2 id="searchTitle">Search Results</h2>
+          </div>
+          <div class="doc-list" id="searchResults"></div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- New Folder Modal -->
+  <div class="modal hidden" id="folderModal">
+    <div class="modal-content">
+      <h3>New Folder</h3>
+      <p class="modal-desc">Create a folder inside the current directory.</p>
+      <input type="text" id="folderNameInput" placeholder="Folder name" class="input" />
+      <div class="modal-actions">
+        <button class="btn" id="cancelFolderBtn">Cancel</button>
+        <button class="btn btn-primary" id="createFolderBtn">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

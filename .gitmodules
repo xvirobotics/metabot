@@ -1,6 +1,0 @@
-[submodule "submodules/metaskill"]
-	path = submodules/metaskill
-	url = https://github.com/xvirobotics/metaskill.git
-[submodule "submodules/metamemory"]
-	path = submodules/metamemory
-	url = https://github.com/xvirobotics/metamemory.git

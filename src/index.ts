@@ -12,6 +12,7 @@ import { startTelegramBot, type TelegramBotHandle } from './telegram/telegram-bo
 import { BotRegistry } from './api/bot-registry.js';
 import { TaskScheduler } from './scheduler/task-scheduler.js';
 import { startApiServer } from './api/http-server.js';
+import { startMemoryServer } from './memory/memory-server.js';
 
 interface FeishuBotHandle {
   name: string;
@@ -131,6 +132,17 @@ async function main() {
   // Create task scheduler
   const scheduler = new TaskScheduler(registry, logger);
 
+  // Start embedded MetaMemory server
+  let memoryServer: ReturnType<typeof startMemoryServer> | undefined;
+  if (appConfig.memory.enabled) {
+    memoryServer = startMemoryServer({
+      port: appConfig.memory.port,
+      databaseDir: appConfig.memory.databaseDir,
+      secret: appConfig.memory.secret || undefined,
+      logger,
+    });
+  }
+
   // Resolve bots config path for API-driven bot CRUD
   const botsConfigPath = process.env.BOTS_CONFIG
     ? path.resolve(process.env.BOTS_CONFIG)
@@ -151,6 +163,10 @@ async function main() {
     logger.info('Shutting down...');
     scheduler.destroy();
     apiServer.close();
+    if (memoryServer) {
+      memoryServer.server.close();
+      memoryServer.storage.close();
+    }
     for (const handle of feishuHandles) {
       handle.bridge.destroy();
     }

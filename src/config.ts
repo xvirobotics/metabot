@@ -47,6 +47,12 @@ export interface AppConfig {
     port: number;
     secret?: string;
   };
+  memory: {
+    enabled: boolean;
+    port: number;
+    databaseDir: string;
+    secret: string;
+  };
 }
 
 function required(name: string): string {
@@ -255,6 +261,11 @@ export function loadAppConfig(): AppConfig {
   const apiPort = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : 9100;
   const apiSecret = process.env.API_SECRET || undefined;
 
+  const memoryEnabled = process.env.MEMORY_ENABLED !== 'false';
+  const memoryPort = process.env.MEMORY_PORT ? parseInt(process.env.MEMORY_PORT, 10) : 8100;
+  const memoryDatabaseDir = process.env.MEMORY_DATABASE_DIR || './data';
+  const memorySecret = process.env.MEMORY_SECRET || '';
+
   return {
     feishuBots,
     telegramBots,
@@ -265,6 +276,12 @@ export function loadAppConfig(): AppConfig {
     api: {
       port: apiPort,
       secret: apiSecret,
+    },
+    memory: {
+      enabled: memoryEnabled,
+      port: memoryPort,
+      databaseDir: memoryDatabaseDir,
+      secret: memorySecret,
     },
   };
 }
