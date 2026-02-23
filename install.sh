@@ -660,13 +660,13 @@ cd "$METABOT_HOME"
 info "Building TypeScript..."
 npm run build 2>/dev/null && success "Build complete" || warn "Build failed, will use tsx directly via PM2"
 
+# Always delete + start fresh to avoid stale/stopped process issues
 if pm2 describe metabot &>/dev/null 2>&1; then
-  info "MetaBot already in PM2, restarting..."
-  pm2 restart metabot
-else
-  info "Starting MetaBot with PM2..."
-  pm2 start ecosystem.config.cjs
+  info "Removing old MetaBot PM2 process..."
+  pm2 delete metabot 2>/dev/null || true
 fi
+info "Starting MetaBot with PM2..."
+pm2 start ecosystem.config.cjs
 
 pm2 save --force 2>/dev/null || true
 success "MetaBot is running!"
