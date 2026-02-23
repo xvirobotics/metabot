@@ -395,10 +395,11 @@ export class MessageBridge {
         });
       }
 
-      // Cancel any pending rate-limited update — we're about to send the final state.
-      // Using cancel() instead of flush() avoids sending an old 'running' card right
-      // before the 'complete' card, which can cause Feishu to rate-limit the final update.
-      rateLimiter.cancel();
+      // Cancel any pending rate-limited update and wait for the rate-limit interval
+      // to elapse since the last sent update. This avoids two problems:
+      // 1. flush() would send a stale 'running' card right before 'complete', triggering rate limits
+      // 2. cancel() alone would skip the wait, causing the final card to be rate-limited too
+      await rateLimiter.cancelAndWait();
 
       // If the stream ended without producing a terminal state (no 'result' message),
       // force the card into a terminal state. This happens when:
@@ -445,7 +446,7 @@ export class MessageBridge {
         toolCalls: lastState.toolCalls,
         errorMessage: err.message || 'Unknown error',
       };
-      rateLimiter.cancel();
+      await rateLimiter.cancelAndWait();
       await this.sendFinalCard(messageId, errorState);
     } finally {
       clearTimeout(timeoutId);
@@ -574,7 +575,7 @@ export class MessageBridge {
       }
 
       // Cancel pending rate-limited update (we'll send the final state directly)
-      rateLimiter.cancel();
+      await rateLimiter.cancelAndWait();
 
       // Force terminal state if stream ended without one
       if (lastState.status !== 'complete' && lastState.status !== 'error') {
@@ -618,7 +619,7 @@ export class MessageBridge {
           toolCalls: lastState.toolCalls,
           errorMessage: err.message || 'Unknown error',
         };
-        rateLimiter.cancel();
+        await rateLimiter.cancelAndWait();
         await this.sendFinalCard(messageId, errorState);
       }
 

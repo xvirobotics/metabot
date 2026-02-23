@@ -53,4 +53,17 @@ export class RateLimiter {
     }
     this.pending = null;
   }
+
+  /**
+   * Cancel pending update and wait until enough time has passed since the last
+   * successfully sent update. This ensures the next direct send won't be
+   * rate-limited by the receiving platform.
+   */
+  async cancelAndWait(): Promise<void> {
+    this.cancel();
+    const elapsed = Date.now() - this.lastSent;
+    if (elapsed < this.intervalMs) {
+      await new Promise((r) => setTimeout(r, this.intervalMs - elapsed));
+    }
+  }
 }
