@@ -5,12 +5,19 @@ import { createEventDispatcher } from './feishu/event-handler.js';
 import { MessageSender } from './feishu/message-sender.js';
 import { FeishuSenderAdapter } from './feishu/feishu-sender-adapter.js';
 import { MessageBridge } from './bridge/message-bridge.js';
+import type { IMessageSender } from './bridge/message-sender.interface.js';
+import type { BotConfigBase } from './config.js';
 import { startTelegramBot, type TelegramBotHandle } from './telegram/telegram-bot.js';
+import { BotRegistry } from './api/bot-registry.js';
+import { TaskScheduler } from './scheduler/task-scheduler.js';
+import { startApiServer } from './api/http-server.js';
 
 interface FeishuBotHandle {
   name: string;
   bridge: MessageBridge;
   wsClient: lark.WSClient;
+  config: BotConfigBase;
+  sender: IMessageSender;
 }
 
 async function startFeishuBot(botConfig: BotConfig, logger: Logger, memoryServerUrl: string): Promise<FeishuBotHandle> {
@@ -69,7 +76,7 @@ async function startFeishuBot(botConfig: BotConfig, logger: Logger, memoryServer
     maxBudgetUsd: botConfig.claude.maxBudgetUsd ?? 'unlimited',
   }, 'Configuration');
 
-  return { name: botConfig.name, bridge, wsClient };
+  return { name: botConfig.name, bridge, wsClient, config: botConfig, sender };
 }
 
 async function main() {
@@ -80,6 +87,9 @@ async function main() {
   const telegramCount = appConfig.telegramBots.length;
   logger.info({ feishuBots: feishuCount, telegramBots: telegramCount, memoryServerUrl: appConfig.memoryServerUrl }, 'Starting MetaBot bridge...');
 
+  // Create bot registry
+  const registry = new BotRegistry();
+
   // Start all bots in parallel
   const feishuHandles: FeishuBotHandle[] = feishuCount > 0
     ? await Promise.all(appConfig.feishuBots.map((bot) => startFeishuBot(bot, logger, appConfig.memoryServerUrl)))
@@ -89,12 +99,49 @@ async function main() {
     ? await Promise.all(appConfig.telegramBots.map((bot) => startTelegramBot(bot, logger, appConfig.memoryServerUrl)))
     : [];
 
+  // Register all bots in the registry and set API port on bridges
+  for (const handle of feishuHandles) {
+    handle.bridge.setApiPort(appConfig.api.port);
+    registry.register({
+      name: handle.name,
+      platform: 'feishu',
+      config: handle.config,
+      bridge: handle.bridge,
+      sender: handle.sender,
+    });
+  }
+
+  for (const handle of telegramHandles) {
+    handle.bridge.setApiPort(appConfig.api.port);
+    registry.register({
+      name: handle.name,
+      platform: 'telegram',
+      config: handle.config,
+      bridge: handle.bridge,
+      sender: handle.sender,
+    });
+  }
+
   const allNames = [...feishuHandles.map((h) => h.name), ...telegramHandles.map((h) => h.name)];
   logger.info({ bots: allNames }, 'All bots started');
+
+  // Create task scheduler
+  const scheduler = new TaskScheduler(registry, logger);
+
+  // Start API server
+  const apiServer = startApiServer({
+    port: appConfig.api.port,
+    secret: appConfig.api.secret,
+    registry,
+    scheduler,
+    logger,
+  });
 
   // Graceful shutdown
   const shutdown = () => {
     logger.info('Shutting down...');
+    scheduler.destroy();
+    apiServer.close();
     for (const handle of feishuHandles) {
       handle.bridge.destroy();
     }

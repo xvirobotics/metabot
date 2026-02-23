@@ -25,6 +25,8 @@ MetaBot — A bridge service connecting IM bots (Feishu/Lark, Telegram) to Claud
 - **Image support** - Send images to Claude for analysis; Claude-generated images are sent back
 - **MCP integration** - Automatically loads MCP server configs from Claude Code settings
 - **Status cards** - Color-coded status, tool call tracking, cost/duration stats
+- **HTTP API** - Inter-bot task delegation via REST API; Claude calls other bots with `curl`
+- **Task Scheduler** - Schedule future tasks ("check back in 2 hours") with persistence and auto-retry
 
 ### Prerequisites
 
@@ -110,6 +112,8 @@ cp .env.example .env              # edit global settings
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `BOTS_CONFIG` | No | - | Path to `bots.json`. If unset, falls back to single-bot env vars |
+| `API_PORT` | No | 9100 | HTTP API server port |
+| `API_SECRET` | No | - | If set, listens on 0.0.0.0 with Bearer token auth; if empty, localhost only |
 | `LOG_LEVEL` | No | info | Log level |
 
 <details>
@@ -215,6 +219,53 @@ Example config:
 
 The bot loads MCP servers based on the bot's configured working directory. If you already have MCP servers configured for Claude Code CLI, they work automatically.
 
+### HTTP API & Task Scheduler
+
+MetaBot includes a built-in HTTP API server for inter-bot communication and task scheduling. Claude uses these features autonomously via `curl` — the API docs are injected into Claude's system prompt.
+
+**API Server** — Starts automatically on `localhost:9100` (configurable via `API_PORT`). If `API_SECRET` is set, listens on `0.0.0.0` with Bearer token auth.
+
+**Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/health` | Service health (uptime, bot count, scheduled tasks) |
+| `GET` | `/api/bots` | List registered bots (name, platform, workingDir, tools) |
+| `POST` | `/api/tasks` | Submit a task to a bot (sync, returns result) |
+| `POST` | `/api/schedule` | Schedule a future task |
+| `GET` | `/api/schedule` | List pending scheduled tasks |
+| `DELETE` | `/api/schedule/:id` | Cancel a scheduled task |
+
+**Examples:**
+
+```bash
+# Health check
+curl localhost:9100/api/health
+
+# List bots
+curl localhost:9100/api/bots
+
+# Delegate a task to another bot
+curl -X POST localhost:9100/api/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"botName":"alice","chatId":"oc_xxx","prompt":"check test results"}'
+
+# Schedule a task for 1 hour later
+curl -X POST localhost:9100/api/schedule \
+  -H 'Content-Type: application/json' \
+  -d '{"botName":"alice","chatId":"oc_xxx","prompt":"check experiment","delaySeconds":3600,"label":"experiment check"}'
+
+# List pending scheduled tasks
+curl localhost:9100/api/schedule
+
+# Cancel a scheduled task
+curl -X DELETE localhost:9100/api/schedule/<task-id>
+```
+
+**Task Scheduler** — Persists to `~/.metabot/scheduled-tasks.json`. On startup, pending tasks are restored. If the target chat is busy, retries every 30s (max 5 times). Tasks overdue by >24h are skipped as stale.
+
+**How Claude uses it:** Claude sees its own `botName`, `chatId`, and the API port in the system prompt. It can delegate work to other bots or schedule future self-checks using `curl` via the Bash tool — no MCP configuration needed.
+
 ### Security Note
 
 This service runs Claude Code in **`bypassPermissions` mode** — Claude can read, write, and execute commands without interactive approval, since there is no terminal for user confirmation in a chat bot context.
@@ -240,6 +291,15 @@ Feishu User                          Telegram User
           → Claude Code Agent SDK
           → Stream Processor → throttled updates (1.5s)
           → Session Manager, Rate Limiter, Outputs Manager
+
+        [Bot Registry] ← registers all bots at startup
+             ↕
+        [HTTP API Server] :9100
+          → POST /api/tasks     (inter-bot delegation)
+          → POST /api/schedule  (future task scheduling)
+             ↕
+        [Task Scheduler] → fires tasks → Message Bridge
+          → persists to ~/.metabot/scheduled-tasks.json
 ```
 
 ---
@@ -261,6 +321,8 @@ MetaBot — 多平台 IM Bot 连接 Claude Code 的桥接服务。支持飞书�
 - **图片支持** - 发图片给 Claude 分析；Claude 生成的图片自动回传
 - **MCP 集成** - 自动加载 Claude Code 配置文件中的 MCP 服务器
 - **状态卡片** - 颜色标识状态、工具调用追踪、费用/耗时统计
+- **HTTP API** - Bot 间任务委派，Claude 通过 `curl` 调用其他 Bot
+- **定时任务** - 支持延时任务调度（"2小时后检查一下"），持久化存储，自动重试
 
 ### 前置条件
 
@@ -394,6 +456,10 @@ cp .env.example .env              # 编辑全局设置
 ```bash
 # 指向 Bot 配置文件
 BOTS_CONFIG=./bots.json
+
+# HTTP API（Bot 间通信和定时任务）
+API_PORT=9100
+# API_SECRET=xxx   # 设置后监听 0.0.0.0 并启用 Bearer 认证；不设则仅监听 localhost
 
 # 日志级别
 LOG_LEVEL=info
@@ -582,6 +648,55 @@ Bot 会根据配置中的工作目录加载对应的 MCP 配置。如果你已�
 
 ---
 
+### HTTP API 与定时任务
+
+MetaBot 内置 HTTP API 服务器，支持 Bot 间任务委派和定时任务调度。Claude 通过 `curl` 自主使用这些功能 —— API 文档会自动注入 Claude 的系统提示词中。
+
+**API 服务器** — 随服务自动启动在 `localhost:9100`（可通过 `API_PORT` 配置）。设置 `API_SECRET` 后监听 `0.0.0.0` 并要求 Bearer 认证。
+
+**接口：**
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/health` | 服务健康检查（运行时长、Bot 数量、定时任务数） |
+| `GET` | `/api/bots` | 列出所有注册的 Bot |
+| `POST` | `/api/tasks` | 向指定 Bot 提交任务（同步，返回结果） |
+| `POST` | `/api/schedule` | 创建定时任务 |
+| `GET` | `/api/schedule` | 查看待执行的定时任务 |
+| `DELETE` | `/api/schedule/:id` | 取消定时任务 |
+
+**使用示例：**
+
+```bash
+# 健康检查
+curl localhost:9100/api/health
+
+# 列出所有 Bot
+curl localhost:9100/api/bots
+
+# 委派任务给其他 Bot
+curl -X POST localhost:9100/api/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"botName":"alice","chatId":"oc_xxx","prompt":"检查测试结果"}'
+
+# 1 小时后执行定时任务
+curl -X POST localhost:9100/api/schedule \
+  -H 'Content-Type: application/json' \
+  -d '{"botName":"alice","chatId":"oc_xxx","prompt":"检查实验结果","delaySeconds":3600,"label":"实验检查"}'
+
+# 查看待执行的定时任务
+curl localhost:9100/api/schedule
+
+# 取消定时任务
+curl -X DELETE localhost:9100/api/schedule/<task-id>
+```
+
+**定时任务调度器** — 任务持久化存储在 `~/.metabot/scheduled-tasks.json`，服务重启后自动恢复。如果目标聊天正在忙，每 30 秒重试一次（最多 5 次）。超过 24 小时未执行的任务视为过期跳过。
+
+**Claude 如何使用：** Claude 的系统提示词中会自动注入当前 `botName`、`chatId` 和 API 端口信息。Claude 可以通过 Bash 工具执行 `curl` 来委派任务给其他 Bot 或给自己创建定时任务 —— 无需配置 MCP。
+
+---
+
 ### 架构概览
 
 ```
@@ -594,6 +709,15 @@ Bot 会根据配置中的工作目录加载对应的 MCP 配置。如果你已�
           → Claude Code Agent SDK
           → 流式处理 → 节流更新（1.5s 间隔）
           → 会话管理、限流、输出文件管理
+
+        [Bot Registry] ← 启动时注册所有 Bot
+             ↕
+        [HTTP API Server] :9100
+          → POST /api/tasks     (Bot 间任务委派)
+          → POST /api/schedule  (定时任务调度)
+             ↕
+        [Task Scheduler] → 触发任务 → Message Bridge
+          → 持久化存储 ~/.metabot/scheduled-tasks.json
 ```
 
 ---

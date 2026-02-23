@@ -26,12 +26,29 @@ interface RunningTask {
   chatId: string;
 }
 
+export interface ApiTaskOptions {
+  prompt: string;
+  chatId: string;
+  userId?: string;
+  sendCards?: boolean;
+}
+
+export interface ApiTaskResult {
+  success: boolean;
+  responseText: string;
+  sessionId?: string;
+  costUsd?: number;
+  durationMs?: number;
+  error?: string;
+}
+
 export class MessageBridge {
   private executor: ClaudeExecutor;
   private sessionManager: SessionManager;
   private outputsManager: OutputsManager;
   private memoryClient: MemoryClient;
   private runningTasks = new Map<string, RunningTask>(); // keyed by chatId
+  private apiPort: number | undefined;
 
   constructor(
     private config: BotConfigBase,
@@ -43,6 +60,14 @@ export class MessageBridge {
     this.sessionManager = new SessionManager(config.claude.defaultWorkingDirectory, logger, config.name);
     this.outputsManager = new OutputsManager(config.claude.outputsBaseDir, logger);
     this.memoryClient = new MemoryClient(memoryServerUrl, logger);
+  }
+
+  setApiPort(port: number): void {
+    this.apiPort = port;
+  }
+
+  isBusy(chatId: string): boolean {
+    return this.runningTasks.has(chatId);
   }
 
   async handleMessage(msg: IncomingMessage): Promise<void> {
@@ -255,6 +280,11 @@ export class MessageBridge {
       return;
     }
 
+    // Build apiContext for system prompt injection
+    const apiContext = this.apiPort
+      ? { port: this.apiPort, botName: this.config.name, chatId }
+      : undefined;
+
     // Start multi-turn execution
     const executionHandle = this.executor.startExecution({
       prompt,
@@ -262,6 +292,7 @@ export class MessageBridge {
       sessionId: session.sessionId,
       abortController,
       outputsDir,
+      apiContext,
     });
 
     const rateLimiter = new RateLimiter(1500);
@@ -411,6 +442,177 @@ export class MessageBridge {
         try { fs.unlinkSync(filePath); } catch { /* ignore */ }
       }
       // Safety net: clean up outputs directory
+      this.outputsManager.cleanup(outputsDir);
+    }
+  }
+
+  async executeApiTask(options: ApiTaskOptions): Promise<ApiTaskResult> {
+    const { prompt, chatId, userId = 'api', sendCards = false } = options;
+
+    if (this.runningTasks.has(chatId)) {
+      return { success: false, responseText: '', error: 'Chat is busy with another task' };
+    }
+
+    const session = this.sessionManager.getSession(chatId);
+    const cwd = session.workingDirectory;
+    const abortController = new AbortController();
+
+    // Prepare per-chat outputs directory
+    const outputsDir = this.outputsManager.prepareDir(chatId);
+
+    const displayPrompt = prompt;
+    const processor = new StreamProcessor(displayPrompt);
+    const rateLimiter = new RateLimiter(1500);
+
+    // Optionally send a streaming card
+    let messageId: string | undefined;
+    if (sendCards) {
+      const initialState: CardState = {
+        status: 'thinking',
+        userPrompt: displayPrompt,
+        responseText: '',
+        toolCalls: [],
+      };
+      messageId = await this.sender.sendCard(chatId, initialState);
+    }
+
+    // Build apiContext for system prompt injection
+    const apiContext = this.apiPort
+      ? { port: this.apiPort, botName: this.config.name, chatId }
+      : undefined;
+
+    // Start execution
+    const executionHandle = this.executor.startExecution({
+      prompt,
+      cwd,
+      sessionId: session.sessionId,
+      abortController,
+      outputsDir,
+      apiContext,
+    });
+
+    const runningTask: RunningTask = {
+      abortController,
+      startTime: Date.now(),
+      executionHandle,
+      pendingQuestion: null,
+      cardMessageId: messageId || '',
+      processor,
+      rateLimiter,
+      chatId,
+    };
+    this.runningTasks.set(chatId, runningTask);
+
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      this.logger.warn({ chatId, userId }, 'API task timeout, aborting');
+      timedOut = true;
+      executionHandle.finish();
+      abortController.abort();
+    }, TASK_TIMEOUT_MS);
+
+    let lastState: CardState = {
+      status: 'thinking',
+      userPrompt: displayPrompt,
+      responseText: '',
+      toolCalls: [],
+    };
+
+    try {
+      for await (const message of executionHandle.stream) {
+        if (abortController.signal.aborted) break;
+
+        const state = processor.processMessage(message);
+        lastState = state;
+
+        // Update session ID if discovered
+        const newSessionId = processor.getSessionId();
+        if (newSessionId && newSessionId !== session.sessionId) {
+          this.sessionManager.setSessionId(chatId, newSessionId);
+        }
+
+        // Auto-answer any AskUserQuestion prompts (no interactive user for API tasks)
+        if (state.status === 'waiting_for_input' && state.pendingQuestion) {
+          const pending = state.pendingQuestion;
+          processor.clearPendingQuestion();
+          const sid = processor.getSessionId() || '';
+          const autoAnswer = JSON.stringify({ answers: { _auto: 'Please decide on your own and proceed.' } });
+          executionHandle.sendAnswer(pending.toolUseId, sid, autoAnswer);
+          continue;
+        }
+
+        if (state.status === 'complete' || state.status === 'error') {
+          break;
+        }
+
+        // Throttled card update if sendCards is enabled
+        if (sendCards && messageId) {
+          rateLimiter.schedule(() => {
+            this.sender.updateCard(messageId!, state);
+          });
+        }
+      }
+
+      // Flush pending card update
+      if (sendCards && messageId) {
+        await rateLimiter.flush();
+      }
+
+      // Force terminal state if stream ended without one
+      if (lastState.status !== 'complete' && lastState.status !== 'error') {
+        if (timedOut) {
+          lastState = { ...lastState, status: 'error', errorMessage: 'Task timed out (1 hour limit)' };
+        } else if (abortController.signal.aborted) {
+          lastState = { ...lastState, status: 'error', errorMessage: 'Task was stopped' };
+        } else {
+          lastState = {
+            ...lastState,
+            status: lastState.responseText ? 'complete' : 'error',
+            errorMessage: lastState.responseText ? undefined : 'Claude session ended unexpectedly',
+          };
+        }
+      }
+
+      // Send final card update
+      if (sendCards && messageId) {
+        await this.sender.updateCard(messageId, lastState);
+      }
+
+      // Send any output files
+      await this.sendOutputFiles(chatId, outputsDir, processor, lastState);
+
+      return {
+        success: lastState.status === 'complete',
+        responseText: lastState.responseText,
+        sessionId: processor.getSessionId(),
+        costUsd: lastState.costUsd,
+        durationMs: lastState.durationMs,
+        error: lastState.errorMessage,
+      };
+    } catch (err: any) {
+      this.logger.error({ err, chatId, userId }, 'API task execution error');
+
+      if (sendCards && messageId) {
+        const errorState: CardState = {
+          status: 'error',
+          userPrompt: displayPrompt,
+          responseText: lastState.responseText,
+          toolCalls: lastState.toolCalls,
+          errorMessage: err.message || 'Unknown error',
+        };
+        await rateLimiter.flush();
+        await this.sender.updateCard(messageId, errorState);
+      }
+
+      return {
+        success: false,
+        responseText: lastState.responseText,
+        error: err.message || 'Unknown error',
+      };
+    } finally {
+      clearTimeout(timeoutId);
+      executionHandle.finish();
+      this.runningTasks.delete(chatId);
       this.outputsManager.cleanup(outputsDir);
     }
   }

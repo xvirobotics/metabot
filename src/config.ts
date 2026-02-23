@@ -43,6 +43,10 @@ export interface AppConfig {
     level: string;
   };
   memoryServerUrl: string;
+  api: {
+    port: number;
+    secret?: string;
+  };
 }
 
 function required(name: string): string {
@@ -248,6 +252,9 @@ export function loadAppConfig(): AppConfig {
 
   const memoryServerUrl = (process.env.MEMORY_SERVER_URL || 'http://localhost:8100').replace(/\/+$/, '');
 
+  const apiPort = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : 9100;
+  const apiSecret = process.env.API_SECRET || undefined;
+
   return {
     feishuBots,
     telegramBots,
@@ -255,5 +262,9 @@ export function loadAppConfig(): AppConfig {
       level: process.env.LOG_LEVEL || 'info',
     },
     memoryServerUrl,
+    api: {
+      port: apiPort,
+      secret: apiSecret,
+    },
   };
 }

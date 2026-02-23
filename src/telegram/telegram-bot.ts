@@ -1,7 +1,8 @@
 import { Bot } from 'grammy';
-import type { TelegramBotConfig } from '../config.js';
+import type { TelegramBotConfig, BotConfigBase } from '../config.js';
 import type { Logger } from '../utils/logger.js';
 import type { IncomingMessage } from '../types.js';
+import type { IMessageSender } from '../bridge/message-sender.interface.js';
 import { TelegramSender } from './telegram-sender.js';
 import { MessageBridge } from '../bridge/message-bridge.js';
 
@@ -9,6 +10,8 @@ export interface TelegramBotHandle {
   name: string;
   bridge: MessageBridge;
   bot: Bot;
+  config: BotConfigBase;
+  sender: IMessageSender;
 }
 
 function isAuthorized(config: TelegramBotConfig, userId: string, chatId: string): boolean {
@@ -172,5 +175,5 @@ export async function startTelegramBot(
     maxBudgetUsd: config.claude.maxBudgetUsd ?? 'unlimited',
   }, 'Configuration');
 
-  return { name: config.name, bridge, bot };
+  return { name: config.name, bridge, bot, config, sender };
 }

@@ -4,12 +4,19 @@ import type { BotConfigBase } from '../config.js';
 import type { Logger } from '../utils/logger.js';
 import { AsyncQueue } from '../utils/async-queue.js';
 
+export interface ApiContext {
+  port: number;
+  botName: string;
+  chatId: string;
+}
+
 export interface ExecutorOptions {
   prompt: string;
   cwd: string;
   sessionId?: string;
   abortController: AbortController;
   outputsDir?: string;
+  apiContext?: ApiContext;
 }
 
 export type SDKMessage = {
@@ -64,7 +71,7 @@ export class ClaudeExecutor {
     private logger: Logger,
   ) {}
 
-  private buildQueryOptions(cwd: string, sessionId: string | undefined, abortController: AbortController, outputsDir?: string): Record<string, unknown> {
+  private buildQueryOptions(cwd: string, sessionId: string | undefined, abortController: AbortController, outputsDir?: string, apiContext?: ApiContext): Record<string, unknown> {
     const queryOptions: Record<string, unknown> = {
       allowedTools: this.config.claude.allowedTools,
       permissionMode: 'bypassPermissions' as const,
@@ -84,6 +91,31 @@ export class ClaudeExecutor {
 
     if (outputsDir) {
       appendSections.push(`## Output Files\nWhen producing output files for the user (images, PDFs, documents, archives, code files, etc.), copy them to: ${outputsDir}\nUse \`cp\` via the Bash tool. The bridge will automatically send files placed there to the user.`);
+    }
+
+    if (apiContext) {
+      appendSections.push([
+        `## MetaBot API`,
+        `You are running as bot "${apiContext.botName}" in chat "${apiContext.chatId}".`,
+        `Available at http://localhost:${apiContext.port}`,
+        ``,
+        `POST /api/tasks — delegate a task to another bot (synchronous, returns result)`,
+        `  Body: {"botName":"<name>","chatId":"<chatId>","prompt":"<prompt>","sendCards":false}`,
+        `POST /api/schedule — schedule a future task`,
+        `  Body: {"botName":"<name>","chatId":"<chatId>","prompt":"<prompt>","delaySeconds":<n>,"label":"<optional>"}`,
+        `GET /api/schedule — list pending scheduled tasks`,
+        `PATCH /api/schedule/<id> — update a pending task (prompt, delaySeconds, label, sendCards)`,
+        `DELETE /api/schedule/<id> — cancel a scheduled task`,
+        `GET /api/bots — discover available bots`,
+        `GET /api/health — service health check`,
+        ``,
+        `### Self-Scheduling Example`,
+        `\`\`\`bash`,
+        `curl -s -X POST http://localhost:${apiContext.port}/api/schedule \\`,
+        `  -H 'Content-Type: application/json' \\`,
+        `  -d '{"botName":"${apiContext.botName}","chatId":"${apiContext.chatId}","prompt":"check on experiment results","delaySeconds":3600}'`,
+        `\`\`\``,
+      ].join('\n'));
     }
 
     if (appendSections.length > 0) {
@@ -114,7 +146,7 @@ export class ClaudeExecutor {
   }
 
   startExecution(options: ExecutorOptions): ExecutionHandle {
-    const { prompt, cwd, sessionId, abortController, outputsDir } = options;
+    const { prompt, cwd, sessionId, abortController, outputsDir, apiContext } = options;
 
     this.logger.info({ cwd, hasSession: !!sessionId, outputsDir }, 'Starting Claude execution (multi-turn)');
 
@@ -132,7 +164,7 @@ export class ClaudeExecutor {
     };
     inputQueue.enqueue(initialMessage);
 
-    const queryOptions = this.buildQueryOptions(cwd, sessionId, abortController, outputsDir);
+    const queryOptions = this.buildQueryOptions(cwd, sessionId, abortController, outputsDir, apiContext);
 
     const stream = query({
       prompt: inputQueue,
