@@ -10,15 +10,7 @@
 
 ---
 
-<p align="center">
-  <img src="docs/screenshot-chat.png" alt="MetaBot in Feishu" width="360" />
-  &nbsp;&nbsp;&nbsp;
-  <img src="docs/screenshot-help.png" alt="MetaBot help card" width="360" />
-</p>
-
-<p align="center"><em>Claude Code, running from a chat message on your phone.</em></p>
-
----
+<!-- TODO: add demo GIF here -->
 
 ## Why
 

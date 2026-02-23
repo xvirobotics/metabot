@@ -10,15 +10,7 @@
 
 ---
 
-<p align="center">
-  <img src="docs/screenshot-chat.png" alt="MetaBot 飞书对话" width="360" />
-  &nbsp;&nbsp;&nbsp;
-  <img src="docs/screenshot-help.png" alt="MetaBot 帮助卡片" width="360" />
-</p>
-
-<p align="center"><em>Claude Code，在手机聊天窗口里运行。</em></p>
-
----
+<!-- TODO: 之后加 demo GIF -->
 
 ## 为什么做 MetaBot
 
