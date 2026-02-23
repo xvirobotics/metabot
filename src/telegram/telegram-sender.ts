@@ -82,9 +82,6 @@ function renderCardHtml(state: CardState): string {
     if (state.durationMs !== undefined) {
       statParts.push(`Duration: ${(state.durationMs / 1000).toFixed(1)}s`);
     }
-    if (state.costUsd !== undefined) {
-      statParts.push(`Cost: $${state.costUsd.toFixed(4)}`);
-    }
     if (statParts.length > 0) {
       parts.push('');
       parts.push(`<i>${escapeHtml(statParts.join(' | '))}</i>`);

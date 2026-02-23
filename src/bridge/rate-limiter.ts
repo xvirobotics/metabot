@@ -44,4 +44,13 @@ export class RateLimiter {
       await fn();
     }
   }
+
+  /** Discard any pending update without executing it. */
+  cancel(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.pending = null;
+  }
 }

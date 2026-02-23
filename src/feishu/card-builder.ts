@@ -86,9 +86,6 @@ export function buildCard(state: CardState): string {
     if (state.durationMs !== undefined) {
       parts.push(`Duration: ${(state.durationMs / 1000).toFixed(1)}s`);
     }
-    if (state.costUsd !== undefined) {
-      parts.push(`Cost: $${state.costUsd.toFixed(4)}`);
-    }
     if (parts.length > 0) {
       elements.push({
         tag: 'note',

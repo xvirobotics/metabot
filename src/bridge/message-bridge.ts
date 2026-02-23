@@ -395,8 +395,10 @@ export class MessageBridge {
         });
       }
 
-      // Flush any pending rate-limited update before sending final card
-      await rateLimiter.flush();
+      // Cancel any pending rate-limited update — we're about to send the final state.
+      // Using cancel() instead of flush() avoids sending an old 'running' card right
+      // before the 'complete' card, which can cause Feishu to rate-limit the final update.
+      rateLimiter.cancel();
 
       // If the stream ended without producing a terminal state (no 'result' message),
       // force the card into a terminal state. This happens when:
@@ -428,8 +430,8 @@ export class MessageBridge {
         }
       }
 
-      // Send final card
-      await this.sender.updateCard(messageId, lastState);
+      // Send final card with retry — this is the most important update
+      await this.sendFinalCard(messageId, lastState);
 
       // Send any output files produced by Claude
       await this.sendOutputFiles(chatId, outputsDir, processor, lastState);
@@ -443,8 +445,8 @@ export class MessageBridge {
         toolCalls: lastState.toolCalls,
         errorMessage: err.message || 'Unknown error',
       };
-      await rateLimiter.flush();
-      await this.sender.updateCard(messageId, errorState);
+      rateLimiter.cancel();
+      await this.sendFinalCard(messageId, errorState);
     } finally {
       clearTimeout(timeoutId);
       if (runningTask.questionTimeoutId) {
@@ -571,10 +573,8 @@ export class MessageBridge {
         }
       }
 
-      // Flush pending card update
-      if (sendCards && messageId) {
-        await rateLimiter.flush();
-      }
+      // Cancel pending rate-limited update (we'll send the final state directly)
+      rateLimiter.cancel();
 
       // Force terminal state if stream ended without one
       if (lastState.status !== 'complete' && lastState.status !== 'error') {
@@ -591,9 +591,9 @@ export class MessageBridge {
         }
       }
 
-      // Send final card update
+      // Send final card update with retry
       if (sendCards && messageId) {
-        await this.sender.updateCard(messageId, lastState);
+        await this.sendFinalCard(messageId, lastState);
       }
 
       // Send any output files
@@ -618,8 +618,8 @@ export class MessageBridge {
           toolCalls: lastState.toolCalls,
           errorMessage: err.message || 'Unknown error',
         };
-        await rateLimiter.flush();
-        await this.sender.updateCard(messageId, errorState);
+        rateLimiter.cancel();
+        await this.sendFinalCard(messageId, errorState);
       }
 
       return {
@@ -683,6 +683,21 @@ export class MessageBridge {
       this.logger.error({ err, chatId }, 'Memory command error');
       await this.sender.sendTextNotice(chatId, '❌ Memory Error', `Failed to connect to memory server: ${err.message}`, 'red');
     }
+  }
+
+  /**
+   * Send the final card update with a retry.
+   * This is the most important update — it changes the card from running → complete/error.
+   * We send it twice with a delay to handle Feishu rate-limiting or transient failures,
+   * since updateCard() swallows errors internally.
+   */
+  private async sendFinalCard(messageId: string, state: CardState): Promise<void> {
+    // First attempt
+    await this.sender.updateCard(messageId, state);
+    // Second attempt after delay — ensures the terminal state is displayed
+    // even if the first attempt was rate-limited or silently dropped
+    await new Promise((r) => setTimeout(r, 2000));
+    await this.sender.updateCard(messageId, state);
   }
 
   private async sendOutputFiles(
