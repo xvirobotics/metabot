@@ -179,11 +179,11 @@ Supported formats: PNG, JPEG, GIF, WEBP, BMP, SVG, TIFF (max 10MB for Feishu, 50
 
 ### MetaMemory (Shared Knowledge Base)
 
-MetaMemory is a document server for persistent shared memory. Claude autonomously reads/writes documents via the `memory` skill, and humans can browse via a Web UI.
+MetaMemory is a document server for persistent shared memory. Claude autonomously reads/writes documents via the `metamemory` skill, and humans can browse via a Web UI.
 
 **How it works:**
 - A separate MetaMemory server (FastAPI + SQLite) stores documents as Markdown in a folder tree with full-text search
-- Claude uses the `memory` skill to create/read/update documents via the server API
+- Claude uses the `metamemory` skill to create/read/update documents via the server API
 - The `/memory` commands provide quick access to folder listings and search results
 - A Web UI at `http://localhost:8100` lets you browse and manage documents
 
@@ -604,11 +604,11 @@ Bot：✅ Session Reset - 开始新对话
 
 ### MetaMemory（共享知识库）
 
-MetaMemory 是一个文档服务器，提供持久化共享记忆。Claude 通过 `memory` skill 自主读写文档，人通过 Web UI 浏览。
+MetaMemory 是一个文档服务器，提供持久化共享记忆。Claude 通过 `metamemory` skill 自主读写文档，人通过 Web UI 浏览。
 
 **工作原理：**
 - 独立的 MetaMemory 服务器（FastAPI + SQLite）以文件夹树形式存储 Markdown 文档，支持全文搜索
-- Claude 通过 `memory` skill 自动调用服务器 API 创建/读取/更新文档
+- Claude 通过 `metamemory` skill 自动调用服务器 API 创建/读取/更新文档
 - `/memory` 命令提供快速查询文件夹列表和搜索结果
 - Web UI `http://localhost:8100` 支持浏览和管理文档
 

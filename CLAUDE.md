@@ -85,7 +85,7 @@ Sessions are isolated per `chatId` with no collision between bots since each bot
 Knowledge persistence is handled by an external **MetaMemory server** (FastAPI + SQLite). The server stores documents as Markdown in a folder tree with full-text search (FTS5).
 
 - **Server URL**: Configured via `MEMORY_SERVER_URL` env var (default: `http://localhost:8100`)
-- **Claude Code Skill**: Claude autonomously reads/writes memory documents via the `memory` skill (installed at `~/.claude/skills/memory/SKILL.md`). When users say "remember this" or Claude wants to persist knowledge, it calls the memory API via curl.
+- **Claude Code Skill**: Claude autonomously reads/writes memory documents via the `metamemory` skill (installed at `~/.claude/skills/metamemory/SKILL.md`). When users say "remember this" or Claude wants to persist knowledge, it calls the memory API via curl.
 - **Feishu commands**: `/memory list`, `/memory search <query>`, `/memory status` — quick queries via `MemoryClient` without spawning Claude.
 - **Web UI**: Browse documents at `http://localhost:8100` — folder tree, markdown rendering, search.
 - **Server repo**: `xvirobotics/metamemory` — independent project with Docker deployment.
