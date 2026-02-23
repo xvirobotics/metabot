@@ -26,7 +26,9 @@ The installer interactively walks you through:
 1. **Working directory** — where Claude will operate (auto-created if missing)
 2. **Claude AI auth** — subscription login, Anthropic API key, or third-party providers (Kimi/DeepSeek/GLM)
 3. **IM platform** — Feishu, Telegram, or both — enter credentials
-4. **Auto-start** — generates `.env` + `bots.json`, builds, starts with PM2
+4. **Skills** — git clones `metaskill` and `metamemory` from their independent repos
+5. **MetaMemory server** (optional) — clones, creates Python venv, installs deps, starts via PM2
+6. **Auto-start** — generates `.env` + `bots.json`, builds, starts with PM2
 
 Telegram bots are ready immediately. Feishu bots need one more step: enable long-connection events in the Feishu dev console and publish.
 
@@ -346,7 +348,9 @@ MetaMemory is a document server for persistent shared memory. Claude autonomousl
 /memory status        — Server health check
 ```
 
-**Configuration:** Set `MEMORY_SERVER_URL` in `.env` (default: `http://localhost:8100`). Run the MetaMemory server via Docker: see `xvirobotics/metamemory`.
+**Setup:** The `install.sh` installer can deploy MetaMemory automatically (clones the repo, creates a Python venv, starts via PM2). Or deploy manually: see [`xvirobotics/metamemory`](https://github.com/xvirobotics/metamemory).
+
+**Configuration:** Set `MEMORY_SERVER_URL` in `.env` (default: `http://localhost:8100`).
 
 ### MCP Server Configuration
 
@@ -430,7 +434,9 @@ curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh
 1. **工作目录** — Claude 的工作目录（不存在则自动创建）
 2. **Claude AI 认证** — 订阅登录、Anthropic API Key、或第三方服务商（Kimi/DeepSeek/GLM）
 3. **IM 平台** — 飞书、Telegram、或两者都选 — 输入凭证
-4. **自动启动** — 生成 `.env` + `bots.json`，编译，PM2 启动
+4. **技能安装** — 从独立仓库 git clone `metaskill` 和 `metamemory`
+5. **MetaMemory 服务器**（可选）— 克隆仓库、创建 Python 虚拟环境、安装依赖、PM2 启动
+6. **自动启动** — 生成 `.env` + `bots.json`，编译，PM2 启动
 
 Telegram Bot 配完即可用。飞书 Bot 还需一步：在飞书开发者后台开启长连接事件订阅并发布。
 
@@ -825,7 +831,9 @@ MetaMemory 是一个文档服务器，提供持久化共享记忆。Claude 通�
 /memory status        — 服务器健康检查
 ```
 
-**配置：** 在 `.env` 中设置 `MEMORY_SERVER_URL`（默认 `http://localhost:8100`）。通过 Docker 运行：见 `xvirobotics/metamemory`。
+**部署：** `install.sh` 安装器可自动部署 MetaMemory（克隆仓库、创建 Python 虚拟环境、PM2 启动）。也可手动部署：见 [`xvirobotics/metamemory`](https://github.com/xvirobotics/metamemory)。
+
+**配置：** 在 `.env` 中设置 `MEMORY_SERVER_URL`（默认 `http://localhost:8100`）。
 
 ---
 
