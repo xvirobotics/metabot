@@ -1,18 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
-import type { BotConfig } from '../config.js';
+import type { BotConfigBase } from '../config.js';
 import type { Logger } from '../utils/logger.js';
-import type { IncomingMessage } from '../feishu/event-handler.js';
-import { MessageSender } from '../feishu/message-sender.js';
-import {
-  buildCard,
-  buildHelpCard,
-  buildStatusCard,
-  buildTextCard,
-  type CardState,
-  type PendingQuestion,
-} from '../feishu/card-builder.js';
+import type { IncomingMessage, CardState, PendingQuestion } from '../types.js';
+import type { IMessageSender } from './message-sender.interface.js';
 import { ClaudeExecutor, type ExecutionHandle } from '../claude/executor.js';
 import { StreamProcessor, extractImagePaths } from '../claude/stream-processor.js';
 import { SessionManager } from '../claude/session-manager.js';
@@ -43,9 +34,9 @@ export class MessageBridge {
   private runningTasks = new Map<string, RunningTask>(); // keyed by chatId
 
   constructor(
-    private config: BotConfig,
+    private config: BotConfigBase,
     private logger: Logger,
-    private sender: MessageSender,
+    private sender: IMessageSender,
     memoryServerUrl: string,
   ) {
     this.executor = new ClaudeExecutor(config, logger);
@@ -72,13 +63,11 @@ export class MessageBridge {
 
     // Check if this chat already has a running task
     if (this.runningTasks.has(chatId)) {
-      await this.sender.sendCard(
+      await this.sender.sendTextNotice(
         chatId,
-        buildTextCard(
-          '⏳ Task In Progress',
-          'You have a running task. Use `/stop` to abort it, or wait for it to finish.',
-          'orange',
-        ),
+        '⏳ Task In Progress',
+        'You have a running task. Use `/stop` to abort it, or wait for it to finish.',
+        'orange',
       );
       return;
     }
@@ -148,15 +137,28 @@ export class MessageBridge {
 
     switch (cmd.toLowerCase()) {
       case '/help':
-        await this.sender.sendCard(chatId, buildHelpCard());
+        await this.sender.sendTextNotice(chatId, '📖 Help', [
+          '**Available Commands:**',
+          '`/reset` - Clear session, start fresh',
+          '`/stop` - Abort current running task',
+          '`/status` - Show current session info',
+          '`/memory` - Memory document commands',
+          '`/help` - Show this help message',
+          '',
+          '**Usage:**',
+          'Send any text message to start a conversation with Claude Code.',
+          'Each chat has an independent session with a fixed working directory.',
+          '',
+          '**Memory Commands:**',
+          '`/memory list` - Show folder tree',
+          '`/memory search <query>` - Search documents',
+          '`/memory status` - Server health check',
+        ].join('\n'));
         break;
 
       case '/reset':
         this.sessionManager.resetSession(chatId);
-        await this.sender.sendCard(
-          chatId,
-          buildTextCard('✅ Session Reset', 'Conversation cleared. Working directory preserved.', 'green'),
-        );
+        await this.sender.sendTextNotice(chatId, '✅ Session Reset', 'Conversation cleared. Working directory preserved.', 'green');
         break;
 
       case '/stop': {
@@ -168,15 +170,9 @@ export class MessageBridge {
           task.executionHandle.finish();
           task.abortController.abort();
           this.runningTasks.delete(chatId);
-          await this.sender.sendCard(
-            chatId,
-            buildTextCard('🛑 Stopped', 'Current task has been aborted.', 'orange'),
-          );
+          await this.sender.sendTextNotice(chatId, '🛑 Stopped', 'Current task has been aborted.', 'orange');
         } else {
-          await this.sender.sendCard(
-            chatId,
-            buildTextCard('ℹ️ No Running Task', 'There is no task to stop.', 'blue'),
-          );
+          await this.sender.sendTextNotice(chatId, 'ℹ️ No Running Task', 'There is no task to stop.', 'blue');
         }
         break;
       }
@@ -184,10 +180,12 @@ export class MessageBridge {
       case '/status': {
         const session = this.sessionManager.getSession(chatId);
         const isRunning = this.runningTasks.has(chatId);
-        await this.sender.sendCard(
-          chatId,
-          buildStatusCard(userId, session.workingDirectory, session.sessionId, isRunning),
-        );
+        await this.sender.sendTextNotice(chatId, '📊 Status', [
+          `**User:** \`${userId}\``,
+          `**Working Directory:** \`${session.workingDirectory}\``,
+          `**Session:** ${session.sessionId ? `\`${session.sessionId.slice(0, 8)}...\`` : '_None_'}`,
+          `**Running:** ${isRunning ? 'Yes ⏳' : 'No'}`,
+        ].join('\n'));
         break;
       }
 
@@ -198,10 +196,7 @@ export class MessageBridge {
       }
 
       default:
-        await this.sender.sendCard(
-          chatId,
-          buildTextCard('❓ Unknown Command', `Unknown command: \`${cmd}\`\nUse \`/help\` for available commands.`, 'orange'),
-        );
+        await this.sender.sendTextNotice(chatId, '❓ Unknown Command', `Unknown command: \`${cmd}\`\nUse \`/help\` for available commands.`, 'orange');
     }
   }
 
@@ -225,7 +220,7 @@ export class MessageBridge {
       if (ok) {
         prompt = `${text}\n\n[Image saved at: ${imagePath}]\nPlease use the Read tool to read and analyze this image file.`;
       } else {
-        prompt = `${text}\n\n(Note: Failed to download the image from Feishu)`;
+        prompt = `${text}\n\n(Note: Failed to download the image)`;
       }
     }
 
@@ -236,7 +231,7 @@ export class MessageBridge {
       if (ok) {
         prompt = `${text}\n\n[File saved at: ${filePath}]\nPlease use the Read tool (for text/code files, images, PDFs) or Bash tool (for other formats) to read and analyze this file.`;
       } else {
-        prompt = `${text}\n\n(Note: Failed to download the file from Feishu)`;
+        prompt = `${text}\n\n(Note: Failed to download the file)`;
       }
     }
 
@@ -253,7 +248,7 @@ export class MessageBridge {
       toolCalls: [],
     };
 
-    const messageId = await this.sender.sendCard(chatId, buildCard(initialState));
+    const messageId = await this.sender.sendCard(chatId, initialState);
 
     if (!messageId) {
       this.logger.error('Failed to send initial card, aborting');
@@ -314,7 +309,7 @@ export class MessageBridge {
 
           // Immediately update card to show the question
           await rateLimiter.flush();
-          await this.sender.updateCard(messageId, buildCard(state));
+          await this.sender.updateCard(messageId, state);
 
           // Set question timeout
           runningTask.questionTimeoutId = setTimeout(() => {
@@ -347,7 +342,7 @@ export class MessageBridge {
 
         // Throttled card update for non-final states
         rateLimiter.schedule(() => {
-          this.sender.updateCard(messageId, buildCard(state));
+          this.sender.updateCard(messageId, state);
         });
       }
 
@@ -385,7 +380,7 @@ export class MessageBridge {
       }
 
       // Send final card
-      await this.sender.updateCard(messageId, buildCard(lastState));
+      await this.sender.updateCard(messageId, lastState);
 
       // Send any output files produced by Claude
       await this.sendOutputFiles(chatId, outputsDir, processor, lastState);
@@ -400,7 +395,7 @@ export class MessageBridge {
         errorMessage: err.message || 'Unknown error',
       };
       await rateLimiter.flush();
-      await this.sender.updateCard(messageId, buildCard(errorState));
+      await this.sender.updateCard(messageId, errorState);
     } finally {
       clearTimeout(timeoutId);
       if (runningTask.questionTimeoutId) {
@@ -424,13 +419,10 @@ export class MessageBridge {
     const [subCmd, ...rest] = args.split(/\s+/);
 
     if (!subCmd) {
-      await this.sender.sendCard(
+      await this.sender.sendTextNotice(
         chatId,
-        buildTextCard(
-          '📝 Memory',
-          'Usage:\n- `/memory list` — Show folder tree\n- `/memory search <query>` — Search documents\n- `/memory status` — Health check',
-          'blue',
-        ),
+        '📝 Memory',
+        'Usage:\n- `/memory list` — Show folder tree\n- `/memory search <query>` — Search documents\n- `/memory status` — Health check',
       );
       return;
     }
@@ -440,50 +432,36 @@ export class MessageBridge {
         case 'list': {
           const tree = await this.memoryClient.listFolderTree();
           const formatted = this.memoryClient.formatFolderTree(tree);
-          await this.sender.sendCard(
-            chatId,
-            buildTextCard('📂 Memory Folders', formatted, 'blue'),
-          );
+          await this.sender.sendTextNotice(chatId, '📂 Memory Folders', formatted);
           break;
         }
         case 'search': {
           const query = rest.join(' ').trim();
           if (!query) {
-            await this.sender.sendCard(chatId, buildTextCard('📝 Memory', 'Usage: `/memory search <query>`', 'blue'));
+            await this.sender.sendTextNotice(chatId, '📝 Memory', 'Usage: `/memory search <query>`');
             return;
           }
           const results = await this.memoryClient.search(query);
           const formatted = this.memoryClient.formatSearchResults(results);
-          await this.sender.sendCard(
-            chatId,
-            buildTextCard(`🔍 Search: ${query}`, formatted, 'blue'),
-          );
+          await this.sender.sendTextNotice(chatId, `🔍 Search: ${query}`, formatted);
           break;
         }
         case 'status': {
           const health = await this.memoryClient.health();
-          await this.sender.sendCard(
+          await this.sender.sendTextNotice(
             chatId,
-            buildTextCard(
-              '📝 Memory Status',
-              `Status: ${health.status}\nDocuments: ${health.document_count}\nFolders: ${health.folder_count}`,
-              'green',
-            ),
+            '📝 Memory Status',
+            `Status: ${health.status}\nDocuments: ${health.document_count}\nFolders: ${health.folder_count}`,
+            'green',
           );
           break;
         }
         default:
-          await this.sender.sendCard(
-            chatId,
-            buildTextCard('📝 Memory', `Unknown sub-command: \`${subCmd}\`\nUse \`/memory\` for help.`, 'orange'),
-          );
+          await this.sender.sendTextNotice(chatId, '📝 Memory', `Unknown sub-command: \`${subCmd}\`\nUse \`/memory\` for help.`, 'orange');
       }
     } catch (err: any) {
       this.logger.error({ err, chatId }, 'Memory command error');
-      await this.sender.sendCard(
-        chatId,
-        buildTextCard('❌ Memory Error', `Failed to connect to memory server: ${err.message}`, 'red'),
-      );
+      await this.sender.sendTextNotice(chatId, '❌ Memory Error', `Failed to connect to memory server: ${err.message}`, 'red');
     }
   }
 
@@ -504,9 +482,8 @@ export class MessageBridge {
           await this.sender.sendImageFile(chatId, file.filePath);
         } else if (!file.isImage && file.sizeBytes < 30 * 1024 * 1024) {
           // Try file upload first; fall back to sending text content for small text files
-          const feishuType = OutputsManager.feishuFileType(file.extension);
-          this.logger.info({ filePath: file.filePath, feishuType }, 'Sending output file from outputs dir');
-          const sent = await this.sender.sendLocalFile(chatId, file.filePath, file.fileName, feishuType);
+          this.logger.info({ filePath: file.filePath }, 'Sending output file from outputs dir');
+          const sent = await this.sender.sendLocalFile(chatId, file.filePath, file.fileName);
           if (!sent && OutputsManager.isTextFile(file.extension) && file.sizeBytes < 30 * 1024) {
             this.logger.info({ filePath: file.filePath }, 'File upload failed, sending as text message');
             const content = fs.readFileSync(file.filePath, 'utf-8');

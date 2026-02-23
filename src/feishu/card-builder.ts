@@ -1,31 +1,6 @@
-export type CardStatus = 'thinking' | 'running' | 'complete' | 'error' | 'waiting_for_input';
-
-export interface ToolCall {
-  name: string;
-  detail: string;
-  status: 'running' | 'done';
-}
-
-export interface PendingQuestion {
-  toolUseId: string;
-  questions: Array<{
-    question: string;
-    header: string;
-    options: Array<{ label: string; description: string }>;
-    multiSelect: boolean;
-  }>;
-}
-
-export interface CardState {
-  status: CardStatus;
-  userPrompt: string;
-  responseText: string;
-  toolCalls: ToolCall[];
-  costUsd?: number;
-  durationMs?: number;
-  errorMessage?: string;
-  pendingQuestion?: PendingQuestion;
-}
+// Re-export shared types so existing imports from this module continue to work
+export type { CardStatus, ToolCall, PendingQuestion, CardState } from '../types.js';
+import type { CardState, CardStatus } from '../types.js';
 
 const STATUS_CONFIG: Record<CardStatus, { color: string; title: string; icon: string }> = {
   thinking: { color: 'blue', title: 'Thinking...', icon: '🔵' },

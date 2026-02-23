@@ -3,18 +3,20 @@ import { loadAppConfig, type BotConfig } from './config.js';
 import { createLogger, type Logger } from './utils/logger.js';
 import { createEventDispatcher } from './feishu/event-handler.js';
 import { MessageSender } from './feishu/message-sender.js';
+import { FeishuSenderAdapter } from './feishu/feishu-sender-adapter.js';
 import { MessageBridge } from './bridge/message-bridge.js';
+import { startTelegramBot, type TelegramBotHandle } from './telegram/telegram-bot.js';
 
-interface BotHandle {
+interface FeishuBotHandle {
   name: string;
   bridge: MessageBridge;
   wsClient: lark.WSClient;
 }
 
-async function startBot(botConfig: BotConfig, logger: Logger, memoryServerUrl: string): Promise<BotHandle> {
+async function startFeishuBot(botConfig: BotConfig, logger: Logger, memoryServerUrl: string): Promise<FeishuBotHandle> {
   const botLogger = logger.child({ bot: botConfig.name });
 
-  botLogger.info('Starting bot...');
+  botLogger.info('Starting Feishu bot...');
 
   // Create Feishu API client
   const client = new lark.Client({
@@ -37,8 +39,9 @@ async function startBot(botConfig: BotConfig, logger: Logger, memoryServerUrl: s
     botLogger.warn({ err }, 'Failed to fetch bot info, group @mention filtering may be less accurate');
   }
 
-  // Create sender and bridge
-  const sender = new MessageSender(client, botLogger);
+  // Create sender and bridge (FeishuSenderAdapter wraps the Feishu-specific MessageSender)
+  const rawSender = new MessageSender(client, botLogger);
+  const sender = new FeishuSenderAdapter(rawSender);
   const bridge = new MessageBridge(botConfig, botLogger, sender, memoryServerUrl);
 
   // Create event dispatcher wired to the bridge
@@ -58,7 +61,7 @@ async function startBot(botConfig: BotConfig, logger: Logger, memoryServerUrl: s
   // Start WebSocket connection with event dispatcher
   await wsClient.start({ eventDispatcher: dispatcher });
 
-  botLogger.info('Bot is running');
+  botLogger.info('Feishu bot is running');
   botLogger.info({
     defaultWorkingDirectory: botConfig.claude.defaultWorkingDirectory,
     allowedTools: botConfig.claude.allowedTools,
@@ -73,19 +76,31 @@ async function main() {
   const appConfig = loadAppConfig();
   const logger = createLogger(appConfig.log.level);
 
-  logger.info({ botCount: appConfig.bots.length, memoryServerUrl: appConfig.memoryServerUrl }, 'Starting MetaBot bridge...');
+  const feishuCount = appConfig.feishuBots.length;
+  const telegramCount = appConfig.telegramBots.length;
+  logger.info({ feishuBots: feishuCount, telegramBots: telegramCount, memoryServerUrl: appConfig.memoryServerUrl }, 'Starting MetaBot bridge...');
 
-  const handles: BotHandle[] = await Promise.all(
-    appConfig.bots.map((botConfig) => startBot(botConfig, logger, appConfig.memoryServerUrl)),
-  );
+  // Start all bots in parallel
+  const feishuHandles: FeishuBotHandle[] = feishuCount > 0
+    ? await Promise.all(appConfig.feishuBots.map((bot) => startFeishuBot(bot, logger, appConfig.memoryServerUrl)))
+    : [];
 
-  logger.info({ bots: handles.map((h) => h.name) }, 'All bots started');
+  const telegramHandles: TelegramBotHandle[] = telegramCount > 0
+    ? await Promise.all(appConfig.telegramBots.map((bot) => startTelegramBot(bot, logger, appConfig.memoryServerUrl)))
+    : [];
+
+  const allNames = [...feishuHandles.map((h) => h.name), ...telegramHandles.map((h) => h.name)];
+  logger.info({ bots: allNames }, 'All bots started');
 
   // Graceful shutdown
   const shutdown = () => {
     logger.info('Shutting down...');
-    for (const handle of handles) {
+    for (const handle of feishuHandles) {
       handle.bridge.destroy();
+    }
+    for (const handle of telegramHandles) {
+      handle.bridge.destroy();
+      handle.bot.stop();
     }
     process.exit(0);
   };

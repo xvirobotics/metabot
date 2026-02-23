@@ -2,16 +2,9 @@ import * as lark from '@larksuiteoapi/node-sdk';
 import type { BotConfig } from '../config.js';
 import type { Logger } from '../utils/logger.js';
 
-export interface IncomingMessage {
-  messageId: string;
-  chatId: string;
-  chatType: string;
-  userId: string;
-  text: string;
-  imageKey?: string;
-  fileKey?: string;
-  fileName?: string;
-}
+// Re-export from shared types so existing imports continue to work
+export type { IncomingMessage } from '../types.js';
+import type { IncomingMessage } from '../types.js';
 
 export type MessageHandler = (msg: IncomingMessage) => void;
 

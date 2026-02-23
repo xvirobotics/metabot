@@ -3,12 +3,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-export interface BotConfig {
+/** Shared config fields used by MessageBridge and ClaudeExecutor (platform-agnostic). */
+export interface BotConfigBase {
   name: string;
-  feishu: {
-    appId: string;
-    appSecret: string;
-  };
   auth: {
     authorizedUserIds: string[];
     authorizedChatIds: string[];
@@ -24,8 +21,24 @@ export interface BotConfig {
   };
 }
 
+/** Feishu bot config (extends base with Feishu credentials). */
+export interface BotConfig extends BotConfigBase {
+  feishu: {
+    appId: string;
+    appSecret: string;
+  };
+}
+
+/** Telegram bot config (extends base with Telegram credentials). */
+export interface TelegramBotConfig extends BotConfigBase {
+  telegram: {
+    botToken: string;
+  };
+}
+
 export interface AppConfig {
-  bots: BotConfig[];
+  feishuBots: BotConfig[];
+  telegramBots: TelegramBotConfig[];
   log: {
     level: string;
   };
@@ -45,7 +58,9 @@ function commaSplit(value: string | undefined): string[] {
   return value.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-interface BotJsonEntry {
+// --- Feishu JSON entry (used in bots.json) ---
+
+interface FeishuBotJsonEntry {
   name: string;
   feishuAppId: string;
   feishuAppSecret: string;
@@ -60,8 +75,7 @@ interface BotJsonEntry {
   downloadsDir?: string;
 }
 
-function botFromJson(entry: BotJsonEntry): BotConfig {
-  const defaultTools = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash'];
+function feishuBotFromJson(entry: FeishuBotJsonEntry): BotConfig {
   return {
     name: entry.name,
     feishu: {
@@ -72,19 +86,66 @@ function botFromJson(entry: BotJsonEntry): BotConfig {
       authorizedUserIds: entry.authorizedUserIds || [],
       authorizedChatIds: entry.authorizedChatIds || [],
     },
-    claude: {
-      defaultWorkingDirectory: entry.defaultWorkingDirectory,
-      allowedTools: entry.allowedTools || commaSplit(process.env.CLAUDE_ALLOWED_TOOLS) || defaultTools,
-      maxTurns: entry.maxTurns ?? (process.env.CLAUDE_MAX_TURNS ? parseInt(process.env.CLAUDE_MAX_TURNS, 10) : undefined),
-      maxBudgetUsd: entry.maxBudgetUsd ?? (process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined),
-      model: entry.model || process.env.CLAUDE_MODEL || undefined,
-      outputsBaseDir: entry.outputsBaseDir || process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), 'metabot-outputs'),
-      downloadsDir: entry.downloadsDir || process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), 'metabot-downloads'),
-    },
+    claude: buildClaudeConfig(entry),
   };
 }
 
-function botFromEnv(): BotConfig {
+// --- Telegram JSON entry (used in bots.json) ---
+
+interface TelegramBotJsonEntry {
+  name: string;
+  telegramBotToken: string;
+  defaultWorkingDirectory: string;
+  authorizedUserIds?: string[];
+  authorizedChatIds?: string[];
+  allowedTools?: string[];
+  maxTurns?: number;
+  maxBudgetUsd?: number;
+  model?: string;
+  outputsBaseDir?: string;
+  downloadsDir?: string;
+}
+
+function telegramBotFromJson(entry: TelegramBotJsonEntry): TelegramBotConfig {
+  return {
+    name: entry.name,
+    telegram: {
+      botToken: entry.telegramBotToken,
+    },
+    auth: {
+      authorizedUserIds: entry.authorizedUserIds || [],
+      authorizedChatIds: entry.authorizedChatIds || [],
+    },
+    claude: buildClaudeConfig(entry),
+  };
+}
+
+// --- Shared Claude config builder ---
+
+function buildClaudeConfig(entry: {
+  defaultWorkingDirectory: string;
+  allowedTools?: string[];
+  maxTurns?: number;
+  maxBudgetUsd?: number;
+  model?: string;
+  outputsBaseDir?: string;
+  downloadsDir?: string;
+}): BotConfigBase['claude'] {
+  const defaultTools = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash'];
+  return {
+    defaultWorkingDirectory: entry.defaultWorkingDirectory,
+    allowedTools: entry.allowedTools || commaSplit(process.env.CLAUDE_ALLOWED_TOOLS) || defaultTools,
+    maxTurns: entry.maxTurns ?? (process.env.CLAUDE_MAX_TURNS ? parseInt(process.env.CLAUDE_MAX_TURNS, 10) : undefined),
+    maxBudgetUsd: entry.maxBudgetUsd ?? (process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined),
+    model: entry.model || process.env.CLAUDE_MODEL || undefined,
+    outputsBaseDir: entry.outputsBaseDir || process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), 'metabot-outputs'),
+    downloadsDir: entry.downloadsDir || process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), 'metabot-downloads'),
+  };
+}
+
+// --- Single-bot env var mode ---
+
+function feishuBotFromEnv(): BotConfig {
   return {
     name: 'default',
     feishu: {
@@ -109,31 +170,90 @@ function botFromEnv(): BotConfig {
   };
 }
 
+function telegramBotFromEnv(): TelegramBotConfig {
+  return {
+    name: 'telegram-default',
+    telegram: {
+      botToken: required('TELEGRAM_BOT_TOKEN'),
+    },
+    auth: {
+      authorizedUserIds: commaSplit(process.env.TELEGRAM_AUTHORIZED_USER_IDS),
+      authorizedChatIds: commaSplit(process.env.TELEGRAM_AUTHORIZED_CHAT_IDS),
+    },
+    claude: {
+      defaultWorkingDirectory: required('CLAUDE_DEFAULT_WORKING_DIRECTORY'),
+      allowedTools: commaSplit(process.env.CLAUDE_ALLOWED_TOOLS) || [
+        'Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash',
+      ],
+      maxTurns: process.env.CLAUDE_MAX_TURNS ? parseInt(process.env.CLAUDE_MAX_TURNS, 10) : undefined,
+      maxBudgetUsd: process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined,
+      model: process.env.CLAUDE_MODEL || undefined,
+      outputsBaseDir: process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), 'metabot-outputs'),
+      downloadsDir: process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), 'metabot-downloads'),
+    },
+  };
+}
+
+// --- New bots.json format ---
+
+interface BotsJsonNewFormat {
+  feishuBots?: FeishuBotJsonEntry[];
+  telegramBots?: TelegramBotJsonEntry[];
+}
+
 export function loadAppConfig(): AppConfig {
   const botsConfigPath = process.env.BOTS_CONFIG;
 
-  let bots: BotConfig[];
+  let feishuBots: BotConfig[] = [];
+  let telegramBots: TelegramBotConfig[] = [];
 
   if (botsConfigPath) {
     const resolved = path.resolve(botsConfigPath);
     const raw = fs.readFileSync(resolved, 'utf-8');
-    const entries: BotJsonEntry[] = JSON.parse(raw);
-    if (!Array.isArray(entries) || entries.length === 0) {
-      throw new Error(`BOTS_CONFIG file must contain a non-empty JSON array: ${resolved}`);
+    const parsed = JSON.parse(raw);
+
+    if (Array.isArray(parsed)) {
+      // Old format: array of feishu bot entries (backward compatible)
+      if (parsed.length === 0) {
+        throw new Error(`BOTS_CONFIG file must contain a non-empty array or object: ${resolved}`);
+      }
+      feishuBots = (parsed as FeishuBotJsonEntry[]).map(feishuBotFromJson);
+    } else if (parsed && typeof parsed === 'object') {
+      // New format: { feishuBots: [...], telegramBots: [...] }
+      const cfg = parsed as BotsJsonNewFormat;
+      if (cfg.feishuBots) {
+        feishuBots = cfg.feishuBots.map(feishuBotFromJson);
+      }
+      if (cfg.telegramBots) {
+        telegramBots = cfg.telegramBots.map(telegramBotFromJson);
+      }
+      if (feishuBots.length === 0 && telegramBots.length === 0) {
+        throw new Error(`BOTS_CONFIG file must define at least one bot: ${resolved}`);
+      }
+    } else {
+      throw new Error(`BOTS_CONFIG file must contain a JSON array or object: ${resolved}`);
     }
-    bots = entries.map(botFromJson);
   } else {
-    bots = [botFromEnv()];
+    // Single-bot mode from environment variables
+    if (process.env.FEISHU_APP_ID) {
+      feishuBots = [feishuBotFromEnv()];
+    }
+    if (process.env.TELEGRAM_BOT_TOKEN) {
+      telegramBots = [telegramBotFromEnv()];
+    }
+    if (feishuBots.length === 0 && telegramBots.length === 0) {
+      throw new Error('No bot configured. Set FEISHU_APP_ID/FEISHU_APP_SECRET or TELEGRAM_BOT_TOKEN, or use BOTS_CONFIG for multi-bot mode.');
+    }
   }
 
   const memoryServerUrl = (process.env.MEMORY_SERVER_URL || 'http://localhost:8100').replace(/\/+$/, '');
 
   return {
-    bots,
+    feishuBots,
+    telegramBots,
     log: {
       level: process.env.LOG_LEVEL || 'info',
     },
     memoryServerUrl,
   };
 }
-

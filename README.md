@@ -12,13 +12,14 @@
 
 ## English
 
-MetaBot — A bridge service connecting IM bots (Feishu/Lark) to Claude Code Agent SDK. Chat with Claude Code from Feishu on any device (including mobile), with real-time streaming updates via interactive cards.
+MetaBot — A bridge service connecting IM bots (Feishu/Lark, Telegram) to Claude Code Agent SDK. Chat with Claude Code from Feishu or Telegram on any device (including mobile), with real-time streaming updates.
 
 ### Features
 
-- **Remote access** - Use Claude Code from any Feishu device, including mobile
-- **Streaming updates** - Real-time execution progress via interactive card updates
-- **Multi-bot support** - Run multiple bots in one process, each bound to a different project directory and Feishu app
+- **Multi-platform** - Supports both Feishu/Lark and Telegram, run them side by side in a single process
+- **Remote access** - Use Claude Code from any device, including mobile
+- **Streaming updates** - Real-time execution progress via message updates (Feishu interactive cards / Telegram editMessageText)
+- **Multi-bot support** - Run multiple bots in one process, each bound to a different project directory
 - **Multi-user parallel** - Independent sessions per chat (each group/DM has its own session)
 - **Multi-turn conversations** - Automatic context persistence across messages
 - **Image support** - Send images to Claude for analysis; Claude-generated images are sent back
@@ -29,7 +30,7 @@ MetaBot — A bridge service connecting IM bots (Feishu/Lark) to Claude Code Age
 
 - **Node.js 18+**
 - **Claude Code authentication** - Either logged in via `claude login` (subscription) or `ANTHROPIC_API_KEY` env var
-- **Feishu Open Platform account** - To create a bot application
+- **Feishu Open Platform account** and/or **Telegram Bot Token** (from [@BotFather](https://t.me/BotFather))
 
 ### Feishu Bot Setup
 
@@ -45,6 +46,15 @@ MetaBot — A bridge service connecting IM bots (Feishu/Lark) to Claude Code Age
    - Feishu validates the WebSocket connection on save, so the service must be running
    - Add event: `im.message.receive_v1`
 5. Publish the app version and get approval
+
+### Telegram Bot Setup
+
+1. Open Telegram and message [@BotFather](https://t.me/BotFather)
+2. Send `/newbot`, follow the prompts to set a name and username
+3. Copy the **bot token** (e.g. `123456:ABC-DEF...`)
+4. Add it to `.env` as `TELEGRAM_BOT_TOKEN` or to `bots.json` (see below)
+
+That's it — no webhooks needed. MetaBot uses **long polling**, so no public IP is required.
 
 ### Quick Start
 
@@ -63,7 +73,22 @@ cp bots.example.json bots.json   # edit with your bot configs
 cp .env.example .env              # edit global settings
 ```
 
-**`bots.json`** — defines one or more bots (see `bots.example.json`):
+**`bots.json`** — defines bots for one or both platforms (see `bots.example.json`):
+
+```json
+{
+  "feishuBots": [
+    { "name": "feishu-project", "feishuAppId": "cli_xxx", "feishuAppSecret": "...", "defaultWorkingDirectory": "/path/to/project" }
+  ],
+  "telegramBots": [
+    { "name": "tg-project", "telegramBotToken": "123456:ABC...", "defaultWorkingDirectory": "/path/to/project" }
+  ]
+}
+```
+
+> **Backward compatible:** If `bots.json` is a plain array (old format), all entries are treated as Feishu bots.
+
+**Feishu bot fields:**
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
@@ -78,6 +103,8 @@ cp .env.example .env              # edit global settings
 | `maxBudgetUsd` | No | unlimited | Max cost per query (USD) |
 | `model` | No | SDK default | Claude model |
 
+**Telegram bot fields:** Same as above, but replace `feishuAppId`/`feishuAppSecret` with `telegramBotToken`.
+
 **`.env`** — global settings:
 
 | Variable | Required | Default | Description |
@@ -86,16 +113,18 @@ cp .env.example .env              # edit global settings
 | `LOG_LEVEL` | No | info | Log level |
 
 <details>
-<summary>Single-bot mode (legacy env var config)</summary>
+<summary>Single-bot mode (env var config)</summary>
 
-If `BOTS_CONFIG` is not set, a single bot is configured from env vars:
+If `BOTS_CONFIG` is not set, bots are configured from env vars. You can run Feishu, Telegram, or both:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `FEISHU_APP_ID` | Yes | Feishu App ID |
-| `FEISHU_APP_SECRET` | Yes | Feishu App Secret |
+| `FEISHU_APP_ID` | For Feishu | Feishu App ID |
+| `FEISHU_APP_SECRET` | For Feishu | Feishu App Secret |
+| `TELEGRAM_BOT_TOKEN` | For Telegram | Telegram bot token from BotFather |
 | `CLAUDE_DEFAULT_WORKING_DIRECTORY` | Yes | Working directory |
-| `AUTHORIZED_USER_IDS` | No | Comma-separated user open_ids |
+| `AUTHORIZED_USER_IDS` | No | Feishu user open_ids (comma-separated) |
+| `TELEGRAM_AUTHORIZED_USER_IDS` | No | Telegram user IDs (comma-separated) |
 | `CLAUDE_ALLOWED_TOOLS` | No | Comma-separated tools |
 | `CLAUDE_MAX_TURNS` | No | Max turns (unlimited if unset) |
 | `CLAUDE_MAX_BUDGET_USD` | No | Max budget (unlimited if unset) |
@@ -138,11 +167,11 @@ pm2 save                # Save current process list
 
 ### Image Support
 
-**Send images to Claude:** Send an image in Feishu chat, and Claude will analyze it.
+**Send images to Claude:** Send an image in chat, and Claude will analyze it (both Feishu and Telegram).
 
-**Receive images from Claude:** When Claude generates or writes image files (via Write tool, Bash, or MCP tools), they are automatically uploaded and sent back to Feishu.
+**Receive images from Claude:** When Claude generates or writes image files (via Write tool, Bash, or MCP tools), they are automatically uploaded and sent back to chat.
 
-Supported formats: PNG, JPEG, GIF, WEBP, BMP, SVG, TIFF (max 10MB per Feishu limit).
+Supported formats: PNG, JPEG, GIF, WEBP, BMP, SVG, TIFF (max 10MB for Feishu, 50MB for Telegram).
 
 ### MetaMemory (Shared Knowledge Base)
 
@@ -202,15 +231,15 @@ This service runs Claude Code in **`bypassPermissions` mode** — Claude can rea
 ### Architecture
 
 ```
-Feishu User
-  → [WSClient] receives message event
-  → [Event Handler] auth check, extract text, strip @mentions
-  → [Message Bridge] orchestrates:
-      1. Send "thinking" card
-      2. Call Claude Code Agent SDK
-      3. Stream process → throttled card updates (1.5s interval)
-      4. Final result card
-  → User sees real-time progress and results in Feishu
+Feishu User                          Telegram User
+  → [WSClient] WebSocket               → [grammY] Long Polling
+  → [Event Handler]                     → [Telegram Bot Handler]
+  → [FeishuSenderAdapter]               → [TelegramSender]
+       ↘                               ↙
+        [Message Bridge] (shared, platform-agnostic)
+          → Claude Code Agent SDK
+          → Stream Processor → throttled updates (1.5s)
+          → Session Manager, Rate Limiter, Outputs Manager
 ```
 
 ---
@@ -219,16 +248,17 @@ Feishu User
 
 ## 中文
 
-MetaBot — 飞书 Bot 连接 Claude Code 的桥接服务。在飞书（包括手机端）通过聊天远程控制本机的 Claude Code，实时查看执行过程和结果。
+MetaBot — 多平台 IM Bot 连接 Claude Code 的桥接服务。支持飞书和 Telegram，在手机端通过聊天远程控制本机的 Claude Code，实时查看执行过程和结果。
 
 ### 功能特性
 
-- **远程访问** - 在飞书任意设备上使用 Claude Code，手机也能写代码
-- **流式更新** - 通过飞书交互卡片实时展示执行进度
-- **多机器人支持** - 单进程运行多个 Bot，每个 Bot 绑定不同项目目录和飞书应用
+- **多平台支持** - 同时支持飞书（Feishu/Lark）和 Telegram，可在单进程中并行运行
+- **远程访问** - 在任意设备上使用 Claude Code，手机也能写代码
+- **流式更新** - 实时展示执行进度（飞书交互卡片 / Telegram 消息编辑）
+- **多机器人支持** - 单进程运行多个 Bot，每个 Bot 绑定不同项目目录
 - **多用户并行** - 每个会话（群聊/私聊）独立会话，互不干扰
 - **多轮对话** - 自动维护对话上下文，支持连续交互
-- **图片支持** - 发图片给 Claude 分析；Claude 生成的图片自动回传飞书
+- **图片支持** - 发图片给 Claude 分析；Claude 生成的图片自动回传
 - **MCP 集成** - 自动加载 Claude Code 配置文件中的 MCP 服务器
 - **状态卡片** - 颜色标识状态、工具调用追踪、费用/耗时统计
 
@@ -236,7 +266,7 @@ MetaBot — 飞书 Bot 连接 Claude Code 的桥接服务。在飞书（包括�
 
 - **Node.js 18+**
 - **Claude Code 认证** - 通过 `claude login` 登录（订阅用户），或设置 `ANTHROPIC_API_KEY` 环境变量
-- **飞书开放平台账号** - 用于创建机器人应用
+- **飞书开放平台账号**（飞书 Bot）和/或 **Telegram Bot Token**（从 [@BotFather](https://t.me/BotFather) 获取）
 
 ---
 
@@ -284,6 +314,17 @@ MetaBot — 飞书 Bot 连接 Claude Code 的桥接服务。在飞书（包括�
 
 ---
 
+### Telegram 机器人配置（可选）
+
+1. 在 Telegram 中找到 [@BotFather](https://t.me/BotFather)
+2. 发送 `/newbot`，按提示设置名称和用户名
+3. 复制 **bot token**（格式如 `123456:ABC-DEF...`）
+4. 写入 `.env` 的 `TELEGRAM_BOT_TOKEN` 或加到 `bots.json`（见下方配置）
+
+无需 Webhook，MetaBot 使用**长轮询（Long Polling）**模式，不需要公网 IP。
+
+---
+
 ### 第二步：一键部署
 
 ```bash
@@ -305,20 +346,33 @@ cp bots.example.json bots.json   # 编辑 Bot 配置
 cp .env.example .env              # 编辑全局设置
 ```
 
-**`bots.json`** — 定义一个或多个 Bot（参考 `bots.example.json`）：
+**`bots.json`** — 定义一个或多个 Bot（参考 `bots.example.json`），支持飞书和 Telegram 混合配置：
 
 ```json
-[
-  {
-    "name": "my-project",
-    "feishuAppId": "cli_xxxxxxxxxx",
-    "feishuAppSecret": "xxxxxxxxxxxxxxxxxx",
-    "defaultWorkingDirectory": "/path/to/your/project",
-    "authorizedUserIds": ["ou_xxxx"],
-    "allowedTools": ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"]
-  }
-]
+{
+  "feishuBots": [
+    {
+      "name": "feishu-project",
+      "feishuAppId": "cli_xxx",
+      "feishuAppSecret": "xxxxxxxxxx",
+      "defaultWorkingDirectory": "/path/to/project",
+      "authorizedUserIds": ["ou_xxxx"]
+    }
+  ],
+  "telegramBots": [
+    {
+      "name": "tg-project",
+      "telegramBotToken": "123456:ABC-DEF...",
+      "defaultWorkingDirectory": "/path/to/project",
+      "authorizedUserIds": ["12345678"]
+    }
+  ]
+}
 ```
+
+> **向后兼容**：如果 `bots.json` 是数组格式（旧格式），所有条目作为飞书 Bot 处理。
+
+**飞书 Bot 字段：**
 
 | 字段 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -333,6 +387,8 @@ cp .env.example .env              # 编辑全局设置
 | `maxBudgetUsd` | 否 | 不限制 | 每次请求最大花费（美元） |
 | `model` | 否 | SDK 默认 | 指定 Claude 模型 |
 
+**Telegram Bot 字段：** 与飞书相同，但用 `telegramBotToken` 替代 `feishuAppId`/`feishuAppSecret`。
+
 **`.env`** — 全局设置：
 
 ```bash
@@ -343,7 +399,7 @@ BOTS_CONFIG=./bots.json
 LOG_LEVEL=info
 ```
 
-> **多 Bot 模式**：在 `bots.json` 中定义多个条目即可。每个 Bot 绑定不同的飞书应用和项目目录，在单个进程内同时运行。
+> **多 Bot 模式**：在 `bots.json` 中定义多个条目即可。飞书和 Telegram Bot 可以混合配置，在单个进程内同时运行。
 
 #### 关于 Claude Code 认证
 
@@ -417,9 +473,9 @@ pm2 save                # 保存当前进程列表
 
 #### 基本流程
 
-1. 在飞书中找到你的机器人（私聊或拉入群组）
+1. 在飞书或 Telegram 中找到你的机器人（私聊或拉入群组）
 2. 直接发送消息开始和 Claude Code 对话（工作目录已在配置中固定）
-3. 卡片会实时更新执行进度，完成后显示最终结果
+3. 消息会实时更新执行进度，完成后显示最终结果
 
 #### 可用命令
 
@@ -465,17 +521,18 @@ Bot：✅ Session Reset - 开始新对话
 - 会话按**聊天**（chat_id）隔离，每个群聊和私聊都有独立的会话
 - 每个 Bot 绑定固定的工作目录，不同 Bot 对应不同项目
 - 不同聊天的任务可以同时并行执行
-- 多个 Bot 在单进程中运行，各自独立的飞书 WebSocket 连接
+- 飞书 Bot 通过 WebSocket 长连接，Telegram Bot 通过长轮询，均不需要公网 IP
+- 多个 Bot（可跨平台）在单进程中运行，共享 Claude 执行引擎
 
 ---
 
 ### 图片支持
 
-**发送图片给 Claude：** 在飞书中直接发送图片，Claude 会自动分析图片内容。
+**发送图片给 Claude：** 在飞书或 Telegram 中直接发送图片，Claude 会自动分析图片内容。
 
-**接收 Claude 生成的图片：** 当 Claude 通过工具（Write、Bash、MCP 等）生成图片文件时，图片会自动上传并发送到飞书聊天中。
+**接收 Claude 生成的图片：** 当 Claude 通过工具（Write、Bash、MCP 等）生成图片文件时，图片会自动上传并发送到聊天中。
 
-支持格式：PNG、JPEG、GIF、WEBP、BMP、SVG、TIFF（单张最大 10MB，飞书限制）。
+支持格式：PNG、JPEG、GIF、WEBP、BMP、SVG、TIFF（飞书最大 10MB，Telegram 最大 50MB）。
 
 ---
 
@@ -528,15 +585,15 @@ Bot 会根据配置中的工作目录加载对应的 MCP 配置。如果你已�
 ### 架构概览
 
 ```
-飞书用户发消息
-  → [WSClient 长连接] 接收消息事件
-  → [Event Handler] 鉴权、提取文本、去除 @
-  → [Message Bridge] 编排核心流程：
-      1. 发送"思考中"卡片
-      2. 调用 Claude Code Agent SDK
-      3. 流式处理 → 节流更新卡片（1.5s 间隔）
-      4. 完成后更新为最终结果卡片
-  → 用户在飞书看到实时过程和结果
+飞书用户                              Telegram 用户
+  → [WSClient 长连接]                    → [grammY 长轮询]
+  → [Event Handler]                     → [Telegram Bot Handler]
+  → [FeishuSenderAdapter]               → [TelegramSender]
+       ↘                               ↙
+        [Message Bridge] 共享核心（平台无关）
+          → Claude Code Agent SDK
+          → 流式处理 → 节流更新（1.5s 间隔）
+          → 会话管理、限流、输出文件管理
 ```
 
 ---
@@ -560,7 +617,7 @@ Bot 会根据配置中的工作目录加载对应的 MCP 配置。如果你已�
 
 **Q: 需要公网 IP 吗？**
 
-不需要。本项目使用飞书的 **WebSocket 长连接**模式接收事件，只需要能访问外网即可，无需域名或公网 IP。
+不需要。飞书使用 **WebSocket 长连接**，Telegram 使用**长轮询**，两者都只需能访问外网即可，无需域名或公网 IP。
 
 **Q: 为什么消息没有响应？**
 

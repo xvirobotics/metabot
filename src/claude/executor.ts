@@ -1,6 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { BotConfig } from '../config.js';
+import type { BotConfigBase } from '../config.js';
 import type { Logger } from '../utils/logger.js';
 import { AsyncQueue } from '../utils/async-queue.js';
 
@@ -60,7 +60,7 @@ export interface ExecutionHandle {
 
 export class ClaudeExecutor {
   constructor(
-    private config: BotConfig,
+    private config: BotConfigBase,
     private logger: Logger,
   ) {}
 
@@ -83,7 +83,7 @@ export class ClaudeExecutor {
     const appendSections: string[] = [];
 
     if (outputsDir) {
-      appendSections.push(`## Output Files\nWhen producing output files for the user (images, PDFs, documents, archives, code files, etc.), copy them to: ${outputsDir}\nUse \`cp\` via the Bash tool. The bridge will automatically send files placed there to the user in Feishu.`);
+      appendSections.push(`## Output Files\nWhen producing output files for the user (images, PDFs, documents, archives, code files, etc.), copy them to: ${outputsDir}\nUse \`cp\` via the Bash tool. The bridge will automatically send files placed there to the user.`);
     }
 
     if (appendSections.length > 0) {

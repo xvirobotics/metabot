@@ -1,18 +1,28 @@
-[
-  {
-    "name": "project-alpha",
-    "feishuAppId": "cli_xxx",
-    "feishuAppSecret": "secret1",
-    "defaultWorkingDirectory": "/home/user/project-alpha",
-    "authorizedUserIds": ["ou_xxx"]
-  },
-  {
-    "name": "project-beta",
-    "feishuAppId": "cli_yyy",
-    "feishuAppSecret": "secret2",
-    "defaultWorkingDirectory": "/home/user/project-beta",
-    "allowedTools": ["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
-    "maxTurns": 30,
-    "maxBudgetUsd": 0.5
-  }
-]
+{
+  "feishuBots": [
+    {
+      "name": "project-alpha",
+      "feishuAppId": "cli_xxx",
+      "feishuAppSecret": "secret1",
+      "defaultWorkingDirectory": "/home/user/project-alpha",
+      "authorizedUserIds": ["ou_xxx"]
+    },
+    {
+      "name": "project-beta",
+      "feishuAppId": "cli_yyy",
+      "feishuAppSecret": "secret2",
+      "defaultWorkingDirectory": "/home/user/project-beta",
+      "allowedTools": ["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
+      "maxTurns": 30,
+      "maxBudgetUsd": 0.5
+    }
+  ],
+  "telegramBots": [
+    {
+      "name": "tg-project",
+      "telegramBotToken": "123456:ABC-DEF...",
+      "defaultWorkingDirectory": "/home/user/project",
+      "authorizedUserIds": ["12345678"]
+    }
+  ]
+}
