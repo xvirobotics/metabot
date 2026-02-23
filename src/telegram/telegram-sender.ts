@@ -151,6 +151,17 @@ function markdownToTelegramHtml(md: string): string {
       continue;
     }
 
+    // Markdown table: collect consecutive table rows and render as <pre>
+    if (isTableRow(line)) {
+      const tableLines: string[] = [line];
+      while (i + 1 < lines.length && isTableRow(lines[i + 1])) {
+        i++;
+        tableLines.push(lines[i]);
+      }
+      result.push(renderTable(tableLines));
+      continue;
+    }
+
     // Convert inline markdown for non-code-block lines
     result.push(convertInlineMarkdown(line));
   }
@@ -162,6 +173,66 @@ function markdownToTelegramHtml(md: string): string {
   }
 
   return result.join('\n');
+}
+
+/**
+ * Detects if a line is a Markdown table row: starts and ends with |, or is a separator (|---|---|).
+ */
+function isTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith('|') && trimmed.endsWith('|');
+}
+
+/**
+ * Renders Markdown table rows into a nicely aligned <pre> block.
+ * Strips separator rows (|---|---|), pads columns to equal width.
+ */
+function renderTable(tableLines: string[]): string {
+  // Parse each row into cells
+  const parsed: string[][] = [];
+  for (const line of tableLines) {
+    const trimmed = line.trim();
+    // Skip separator rows like |---|---|
+    if (/^\|[\s\-:|]+\|$/.test(trimmed)) continue;
+    const cells = trimmed
+      .replace(/^\|/, '')
+      .replace(/\|$/, '')
+      .split('|')
+      .map(c => c.trim());
+    parsed.push(cells);
+  }
+
+  if (parsed.length === 0) return '';
+
+  // Compute max width for each column
+  const colCount = Math.max(...parsed.map(r => r.length));
+  const colWidths: number[] = new Array(colCount).fill(0);
+  for (const row of parsed) {
+    for (let c = 0; c < colCount; c++) {
+      const cell = row[c] ?? '';
+      colWidths[c] = Math.max(colWidths[c], cell.length);
+    }
+  }
+
+  // Render aligned rows
+  const renderedRows: string[] = [];
+  for (let r = 0; r < parsed.length; r++) {
+    const row = parsed[r];
+    const cells = [];
+    for (let c = 0; c < colCount; c++) {
+      const cell = row[c] ?? '';
+      cells.push(cell.padEnd(colWidths[c]));
+    }
+    renderedRows.push('| ' + cells.join(' | ') + ' |');
+
+    // Add separator after first row (header)
+    if (r === 0) {
+      const sep = colWidths.map(w => '-'.repeat(w));
+      renderedRows.push('| ' + sep.join(' | ') + ' |');
+    }
+  }
+
+  return `<pre>${escapeHtml(renderedRows.join('\n'))}</pre>`;
 }
 
 /**
