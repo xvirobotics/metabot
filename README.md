@@ -23,11 +23,12 @@ curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh
 ```
 
 The installer interactively walks you through:
-- Platform selection (Feishu, Telegram, or both)
-- IM bot credentials
-- Claude AI authentication (subscription, Anthropic API key, or third-party providers like Kimi/DeepSeek/GLM)
-- Working directory, API secret, MetaMemory setup
-- Automatic PM2 deployment
+1. **Working directory** — where Claude will operate (auto-created if missing)
+2. **Claude AI auth** — subscription login, Anthropic API key, or third-party providers (Kimi/DeepSeek/GLM)
+3. **IM platform** — Feishu, Telegram, or both — enter credentials
+4. **Auto-start** — generates `.env` + `bots.json`, builds, starts with PM2
+
+Telegram bots are ready immediately. Feishu bots need one more step: enable long-connection events in the Feishu dev console and publish.
 
 Re-running the installer on an existing install does `git pull` and preserves your `.env` / `bots.json`.
 
@@ -426,11 +427,12 @@ curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh
 ```
 
 安装器会引导你完成：
-- 平台选择（飞书、Telegram、或两者都选）
-- IM Bot 凭证配置
-- Claude AI 认证（订阅登录、Anthropic API Key、或第三方服务商如 Kimi/DeepSeek/GLM）
-- 工作目录、API 密钥、MetaMemory 配置
-- 自动 PM2 部署
+1. **工作目录** — Claude 的工作目录（不存在则自动创建）
+2. **Claude AI 认证** — 订阅登录、Anthropic API Key、或第三方服务商（Kimi/DeepSeek/GLM）
+3. **IM 平台** — 飞书、Telegram、或两者都选 — 输入凭证
+4. **自动启动** — 生成 `.env` + `bots.json`，编译，PM2 启动
+
+Telegram Bot 配完即可用。飞书 Bot 还需一步：在飞书开发者后台开启长连接事件订阅并发布。
 
 在已有安装上重新运行安装器会执行 `git pull`，并保留现有的 `.env` / `bots.json`。
 
@@ -543,16 +545,7 @@ ANTHROPIC_SMALL_FAST_MODEL=模型名    # 可选
 curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh | bash
 ```
 
-安装器会引导你完成所有配置，包括 Claude AI 认证方式选择：
-
-```
-Claude AI Authentication:
-  1) Claude Code Subscription (OAuth login via 'claude login')
-  2) Anthropic API Key (ANTHROPIC_API_KEY=sk-ant-...)
-  3) Third-party provider (Kimi/Moonshot, DeepSeek, GLM, etc.)
-```
-
-选择第三方服务商后，会进一步引导选择具体提供商和配置 API Key/Model。
+安装器依次引导：工作目录 → Claude AI 认证 → IM 平台凭证 → 自动启动。全程交互式，几分钟完成。
 
 **方式二：手动配置**
 

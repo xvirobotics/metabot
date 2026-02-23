@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 # MetaBot Genesis Installer
-# One command: curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh | bash
 set -euo pipefail
+
+# ============================================================================
+# CRITICAL: When running via `curl | bash`, stdin is the pipe (not terminal).
+# All interactive reads MUST use /dev/tty explicitly.
+# ============================================================================
+if [[ ! -t 0 ]] && [[ -e /dev/tty ]]; then
+  TTY=/dev/tty
+else
+  TTY=/dev/stdin
+fi
 
 # ============================================================================
 # Configuration defaults
 # ============================================================================
 METABOT_HOME="${METABOT_HOME:-$HOME/metabot}"
 METABOT_REPO="${METABOT_REPO:-https://github.com/xvirobotics/metabot.git}"
-DEFAULT_BOT_NAME="genesis"
-DEFAULT_WORK_DIR="$HOME/metabot-workspace"
 
 # ============================================================================
 # Colors and formatting
@@ -20,14 +28,14 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 banner() {
   echo ""
   echo -e "${CYAN}${BOLD}"
   echo "  ╔══════════════════════════════════════════╗"
   echo "  ║          MetaBot Genesis Installer       ║"
-  echo "  ║   一生二，二生三，三生万物                   ║"
+  echo "  ║     一生二，二生三，三生万物               ║"
   echo "  ╚══════════════════════════════════════════╝"
   echo -e "${NC}"
   echo ""
@@ -39,6 +47,7 @@ warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*"; }
 step()    { echo -e "\n${BOLD}==> $*${NC}"; }
 
+# Safe prompt — reads from /dev/tty, uses printf -v (no eval)
 prompt_input() {
   local varname="$1"
   local prompt_text="$2"
@@ -46,15 +55,15 @@ prompt_input() {
   local input
 
   if [[ -n "$default_val" ]]; then
-    echo -en "${CYAN}$prompt_text${NC} [${default_val}]: "
+    echo -en "${CYAN}  $prompt_text${NC} [${default_val}]: " >&2
   else
-    echo -en "${CYAN}$prompt_text${NC}: "
+    echo -en "${CYAN}  $prompt_text${NC}: " >&2
   fi
-  read -r input
+  read -r input < "$TTY" || input=""
   if [[ -z "$input" ]]; then
     input="$default_val"
   fi
-  eval "$varname=\"$input\""
+  printf -v "$varname" '%s' "$input"
 }
 
 prompt_secret() {
@@ -62,10 +71,23 @@ prompt_secret() {
   local prompt_text="$2"
   local input
 
-  echo -en "${CYAN}$prompt_text${NC}: "
-  read -rs input
-  echo ""
-  eval "$varname=\"$input\""
+  echo -en "${CYAN}  $prompt_text${NC}: " >&2
+  read -rs input < "$TTY" || input=""
+  echo "" >&2
+  printf -v "$varname" '%s' "$input"
+}
+
+prompt_choice() {
+  local varname="$1"
+  local default_val="$2"
+  local input
+
+  echo -en "${CYAN}  Choice${NC} [${default_val}]: " >&2
+  read -r input < "$TTY" || input=""
+  if [[ -z "$input" ]]; then
+    input="$default_val"
+  fi
+  printf -v "$varname" '%s' "$input"
 }
 
 prompt_yn() {
@@ -74,11 +96,11 @@ prompt_yn() {
   local input
 
   if [[ "$default" == "y" ]]; then
-    echo -en "${CYAN}$prompt_text${NC} [Y/n]: "
+    echo -en "${CYAN}  $prompt_text${NC} [Y/n]: " >&2
   else
-    echo -en "${CYAN}$prompt_text${NC} [y/N]: "
+    echo -en "${CYAN}  $prompt_text${NC} [y/N]: " >&2
   fi
-  read -r input
+  read -r input < "$TTY" || input=""
   input="${input:-$default}"
   [[ "${input,,}" == "y" || "${input,,}" == "yes" ]]
 }
@@ -121,7 +143,6 @@ check_command() {
 MISSING=0
 check_command git "Git" "https://git-scm.com/downloads" || MISSING=1
 
-# Check Node.js 18+
 if command -v node &>/dev/null; then
   NODE_VER="$(node --version | sed 's/v//')"
   NODE_MAJOR="$(echo "$NODE_VER" | cut -d. -f1)"
@@ -133,7 +154,7 @@ if command -v node &>/dev/null; then
   fi
 else
   error "Node.js not found."
-  echo "  Install: https://nodejs.org/ or use nvm"
+  echo "  Install: https://nodejs.org/ or use nvm/fnm"
   MISSING=1
 fi
 
@@ -170,16 +191,14 @@ info "Running npm install..."
 npm install --production=false
 success "npm dependencies installed"
 
-# Install PM2 globally if missing
 if ! command -v pm2 &>/dev/null; then
   info "Installing PM2 globally..."
   npm install -g pm2
   success "PM2 installed"
 else
-  success "PM2 already installed: $(pm2 --version 2>/dev/null || echo 'unknown')"
+  success "PM2 already installed"
 fi
 
-# Install Claude CLI if missing (required regardless of auth method)
 if command -v claude &>/dev/null; then
   success "Claude CLI found: $(command -v claude)"
 else
@@ -188,7 +207,7 @@ else
   if command -v claude &>/dev/null; then
     success "Claude CLI installed"
   else
-    warn "Claude CLI install may have failed. You can install manually: npm install -g @anthropic-ai/claude-code"
+    warn "Claude CLI install failed. Install manually: npm install -g @anthropic-ai/claude-code"
   fi
 fi
 
@@ -197,9 +216,8 @@ fi
 # ============================================================================
 step "Phase 4: Configuration"
 
-# Skip interactive config if .env already exists
 if [[ -f "$METABOT_HOME/.env" ]]; then
-  warn ".env file already exists. Skipping interactive config."
+  warn ".env already exists. Skipping interactive config."
   warn "Edit ${METABOT_HOME}/.env to modify settings."
   SKIP_CONFIG=true
 else
@@ -207,14 +225,90 @@ else
 fi
 
 if [[ "$SKIP_CONFIG" == "false" ]]; then
+
+  # ------ 4a: Working directory ------
   echo ""
-  echo -e "${BOLD}Select bot platform:${NC}"
+  echo -e "${BOLD}Working Directory:${NC}"
+  prompt_input WORK_DIR "Project directory for Claude to work in" "$HOME/metabot-workspace"
+  mkdir -p "$WORK_DIR"
+  success "Working directory: ${WORK_DIR}"
+
+  # ------ 4b: Claude AI authentication ------
+  echo ""
+  echo -e "${BOLD}Claude AI Authentication:${NC}"
+  echo "  1) Claude Code Subscription (OAuth — run 'claude login' after install)"
+  echo "  2) Anthropic API Key (sk-ant-...)"
+  echo "  3) Third-party provider (Kimi/Moonshot, DeepSeek, GLM, etc.)"
+  prompt_choice AUTH_CHOICE "1"
+
+  CLAUDE_AUTH_ENV_LINES=""
+  CLAUDE_AUTH_METHOD="subscription"
+
+  case "$AUTH_CHOICE" in
+    1)
+      CLAUDE_AUTH_METHOD="subscription"
+      info "Using Claude Code Subscription. Run 'claude login' after install."
+      ;;
+    2)
+      CLAUDE_AUTH_METHOD="anthropic_key"
+      prompt_secret ANTHROPIC_API_KEY "Anthropic API Key (sk-ant-...)"
+      if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+        error "API key is required."; exit 1
+      fi
+      CLAUDE_AUTH_ENV_LINES="ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}"
+      ;;
+    3)
+      CLAUDE_AUTH_METHOD="third_party"
+      echo ""
+      echo -e "  ${BOLD}Select provider:${NC}"
+      echo "    1) Kimi/Moonshot  (https://platform.moonshot.cn)"
+      echo "    2) DeepSeek       (https://platform.deepseek.com)"
+      echo "    3) GLM/Zhipu      (https://open.bigmodel.cn)"
+      echo "    4) Custom URL"
+      prompt_choice PROVIDER_CHOICE "1"
+
+      case "$PROVIDER_CHOICE" in
+        1) PROVIDER_NAME="Kimi/Moonshot"; PROVIDER_BASE_URL="https://api.moonshot.ai/anthropic"
+           PROVIDER_DEFAULT_MODEL=""; PROVIDER_DEFAULT_SMALL_MODEL="" ;;
+        2) PROVIDER_NAME="DeepSeek"; PROVIDER_BASE_URL="https://api.deepseek.com/anthropic"
+           PROVIDER_DEFAULT_MODEL="deepseek-chat"; PROVIDER_DEFAULT_SMALL_MODEL="deepseek-chat" ;;
+        3) PROVIDER_NAME="GLM/Zhipu"; PROVIDER_BASE_URL="https://api.z.ai/api/anthropic"
+           PROVIDER_DEFAULT_MODEL="glm-4.5"; PROVIDER_DEFAULT_SMALL_MODEL="" ;;
+        4) PROVIDER_NAME="Custom"
+           prompt_input PROVIDER_BASE_URL "API Base URL (e.g. https://api.example.com/anthropic)"
+           PROVIDER_DEFAULT_MODEL=""; PROVIDER_DEFAULT_SMALL_MODEL="" ;;
+        *) PROVIDER_NAME="Kimi/Moonshot"; PROVIDER_BASE_URL="https://api.moonshot.ai/anthropic"
+           PROVIDER_DEFAULT_MODEL=""; PROVIDER_DEFAULT_SMALL_MODEL="" ;;
+      esac
+
+      info "Provider: ${PROVIDER_NAME} (${PROVIDER_BASE_URL})"
+      prompt_secret PROVIDER_API_KEY "${PROVIDER_NAME} API Key"
+      if [[ -z "$PROVIDER_API_KEY" ]]; then
+        error "API key is required."; exit 1
+      fi
+
+      prompt_input PROVIDER_MODEL "Model name (enter for default)" "${PROVIDER_DEFAULT_MODEL}"
+      prompt_input PROVIDER_SMALL_MODEL "Small/fast model (enter to skip)" "${PROVIDER_DEFAULT_SMALL_MODEL}"
+
+      CLAUDE_AUTH_ENV_LINES="# ${PROVIDER_NAME} Provider
+ANTHROPIC_BASE_URL=${PROVIDER_BASE_URL}
+ANTHROPIC_AUTH_TOKEN=${PROVIDER_API_KEY}"
+      [[ -n "$PROVIDER_MODEL" ]] && CLAUDE_AUTH_ENV_LINES="${CLAUDE_AUTH_ENV_LINES}
+ANTHROPIC_MODEL=${PROVIDER_MODEL}"
+      [[ -n "$PROVIDER_SMALL_MODEL" ]] && CLAUDE_AUTH_ENV_LINES="${CLAUDE_AUTH_ENV_LINES}
+ANTHROPIC_SMALL_FAST_MODEL=${PROVIDER_SMALL_MODEL}"
+      [[ "$PROVIDER_CHOICE" == "2" ]] && CLAUDE_AUTH_ENV_LINES="${CLAUDE_AUTH_ENV_LINES}
+API_TIMEOUT_MS=600000"
+      ;;
+  esac
+
+  # ------ 4c: IM Bot platform + credentials ------
+  echo ""
+  echo -e "${BOLD}IM Bot Platform:${NC}"
   echo "  1) Feishu/Lark"
   echo "  2) Telegram"
   echo "  3) Both"
-  echo -en "${CYAN}Choice${NC} [1]: "
-  read -r PLATFORM_CHOICE
-  PLATFORM_CHOICE="${PLATFORM_CHOICE:-1}"
+  prompt_choice PLATFORM_CHOICE "1"
 
   SETUP_FEISHU=false
   SETUP_TELEGRAM=false
@@ -225,165 +319,38 @@ if [[ "$SKIP_CONFIG" == "false" ]]; then
     *) SETUP_FEISHU=true ;;
   esac
 
-  # Collect Feishu credentials
   FEISHU_APP_ID=""
   FEISHU_APP_SECRET=""
   if [[ "$SETUP_FEISHU" == "true" ]]; then
     echo ""
-    echo -e "${BOLD}Feishu/Lark Configuration:${NC}"
-    prompt_input FEISHU_APP_ID "Feishu App ID (e.g. cli_xxxx)"
-    prompt_secret FEISHU_APP_SECRET "Feishu App Secret"
+    echo -e "  ${BOLD}Feishu/Lark Credentials:${NC}"
+    prompt_input FEISHU_APP_ID "App ID (e.g. cli_xxxx)"
+    prompt_secret FEISHU_APP_SECRET "App Secret"
     if [[ -z "$FEISHU_APP_ID" || -z "$FEISHU_APP_SECRET" ]]; then
-      error "Feishu App ID and Secret are required."
-      exit 1
+      error "Feishu App ID and Secret are required."; exit 1
     fi
   fi
 
-  # Collect Telegram credentials
   TELEGRAM_BOT_TOKEN=""
   if [[ "$SETUP_TELEGRAM" == "true" ]]; then
     echo ""
-    echo -e "${BOLD}Telegram Configuration:${NC}"
-    prompt_secret TELEGRAM_BOT_TOKEN "Telegram Bot Token (from @BotFather)"
+    echo -e "  ${BOLD}Telegram Credentials:${NC}"
+    prompt_secret TELEGRAM_BOT_TOKEN "Bot Token (from @BotFather)"
     if [[ -z "$TELEGRAM_BOT_TOKEN" ]]; then
-      error "Telegram Bot Token is required."
-      exit 1
+      error "Telegram Bot Token is required."; exit 1
     fi
   fi
 
-  # --------------------------------------------------------------------------
-  # Claude AI Authentication
-  # --------------------------------------------------------------------------
+  # ------ 4d: Bot name + auto-generated settings ------
   echo ""
-  echo -e "${BOLD}Claude AI Authentication:${NC}"
-  echo "  1) Claude Code Subscription (OAuth login via 'claude login')"
-  echo "  2) Anthropic API Key (ANTHROPIC_API_KEY=sk-ant-...)"
-  echo "  3) Third-party provider (Kimi/Moonshot, DeepSeek, GLM, etc.)"
-  echo -en "${CYAN}Choice${NC} [1]: "
-  read -r AUTH_CHOICE
-  AUTH_CHOICE="${AUTH_CHOICE:-1}"
+  echo -e "${BOLD}Bot Name:${NC}"
+  prompt_input BOT_NAME "Name for your genesis bot" "genesis"
 
-  # Auth env vars to write into .env
-  CLAUDE_AUTH_ENV_LINES=""
-
-  case "$AUTH_CHOICE" in
-    1)
-      # OAuth subscription — no env vars needed, user runs `claude login` separately
-      info "Using Claude Code Subscription (OAuth)."
-      info "You will need to run 'claude login' in a separate terminal after install."
-      CLAUDE_AUTH_METHOD="subscription"
-      ;;
-    2)
-      # Direct Anthropic API key
-      prompt_secret ANTHROPIC_API_KEY "Anthropic API Key (sk-ant-...)"
-      if [[ -z "$ANTHROPIC_API_KEY" ]]; then
-        error "API key is required."
-        exit 1
-      fi
-      CLAUDE_AUTH_METHOD="anthropic_key"
-      CLAUDE_AUTH_ENV_LINES="ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}"
-      ;;
-    3)
-      # Third-party provider
-      echo ""
-      echo -e "${BOLD}Select third-party provider:${NC}"
-      echo "  1) Kimi/Moonshot  (https://platform.moonshot.cn)"
-      echo "  2) DeepSeek       (https://platform.deepseek.com)"
-      echo "  3) GLM/Zhipu      (https://open.bigmodel.cn)"
-      echo "  4) Custom (enter your own base URL)"
-      echo -en "${CYAN}Provider${NC} [1]: "
-      read -r PROVIDER_CHOICE
-      PROVIDER_CHOICE="${PROVIDER_CHOICE:-1}"
-
-      case "$PROVIDER_CHOICE" in
-        1)
-          PROVIDER_NAME="Kimi/Moonshot"
-          PROVIDER_BASE_URL="https://api.moonshot.ai/anthropic"
-          PROVIDER_DEFAULT_MODEL=""
-          PROVIDER_DEFAULT_SMALL_MODEL=""
-          ;;
-        2)
-          PROVIDER_NAME="DeepSeek"
-          PROVIDER_BASE_URL="https://api.deepseek.com/anthropic"
-          PROVIDER_DEFAULT_MODEL="deepseek-chat"
-          PROVIDER_DEFAULT_SMALL_MODEL="deepseek-chat"
-          ;;
-        3)
-          PROVIDER_NAME="GLM/Zhipu"
-          PROVIDER_BASE_URL="https://api.z.ai/api/anthropic"
-          PROVIDER_DEFAULT_MODEL="glm-4.5"
-          PROVIDER_DEFAULT_SMALL_MODEL=""
-          ;;
-        4)
-          PROVIDER_NAME="Custom"
-          prompt_input PROVIDER_BASE_URL "API Base URL (e.g. https://api.example.com/anthropic)"
-          PROVIDER_DEFAULT_MODEL=""
-          PROVIDER_DEFAULT_SMALL_MODEL=""
-          ;;
-        *)
-          PROVIDER_NAME="Kimi/Moonshot"
-          PROVIDER_BASE_URL="https://api.moonshot.ai/anthropic"
-          PROVIDER_DEFAULT_MODEL=""
-          PROVIDER_DEFAULT_SMALL_MODEL=""
-          ;;
-      esac
-
-      info "Provider: ${PROVIDER_NAME}"
-      prompt_input PROVIDER_BASE_URL "API Base URL" "$PROVIDER_BASE_URL"
-      prompt_secret PROVIDER_API_KEY "${PROVIDER_NAME} API Key"
-      if [[ -z "$PROVIDER_API_KEY" ]]; then
-        error "API key is required."
-        exit 1
-      fi
-
-      # Model configuration (optional)
-      prompt_input PROVIDER_MODEL "Model name (leave empty for provider default)" "${PROVIDER_DEFAULT_MODEL}"
-      prompt_input PROVIDER_SMALL_MODEL "Small/fast model name (leave empty to skip)" "${PROVIDER_DEFAULT_SMALL_MODEL}"
-
-      CLAUDE_AUTH_METHOD="third_party"
-      CLAUDE_AUTH_ENV_LINES="# ${PROVIDER_NAME} Provider
-ANTHROPIC_BASE_URL=${PROVIDER_BASE_URL}
-ANTHROPIC_AUTH_TOKEN=${PROVIDER_API_KEY}"
-      if [[ -n "$PROVIDER_MODEL" ]]; then
-        CLAUDE_AUTH_ENV_LINES="${CLAUDE_AUTH_ENV_LINES}
-ANTHROPIC_MODEL=${PROVIDER_MODEL}"
-      fi
-      if [[ -n "$PROVIDER_SMALL_MODEL" ]]; then
-        CLAUDE_AUTH_ENV_LINES="${CLAUDE_AUTH_ENV_LINES}
-ANTHROPIC_SMALL_FAST_MODEL=${PROVIDER_SMALL_MODEL}"
-      fi
-      # DeepSeek benefits from extended timeout
-      if [[ "$PROVIDER_CHOICE" == "2" ]]; then
-        CLAUDE_AUTH_ENV_LINES="${CLAUDE_AUTH_ENV_LINES}
-API_TIMEOUT_MS=600000"
-      fi
-      ;;
-    *)
-      CLAUDE_AUTH_METHOD="subscription"
-      ;;
-  esac
-
-  # Common settings
-  echo ""
-  echo -e "${BOLD}Common Settings:${NC}"
-  prompt_input BOT_NAME "Bot name" "$DEFAULT_BOT_NAME"
-  prompt_input WORK_DIR "Working directory for Claude" "$DEFAULT_WORK_DIR"
-
-  # Generate API secret
+  # Auto-generate API secret
   API_SECRET="$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n' | head -c 64)"
-  info "Generated API secret (stored in .env)"
-
-  prompt_input API_PORT "API server port" "9100"
-  prompt_input LOG_LEVEL "Log level (debug/info/warn/error)" "info"
-
-  # MetaMemory
-  INSTALL_METAMEMORY=false
-  if prompt_yn "Install MetaMemory server for knowledge persistence?" "n"; then
-    INSTALL_METAMEMORY=true
-    prompt_input MEMORY_SERVER_URL "MetaMemory server URL" "http://localhost:8100"
-  else
-    MEMORY_SERVER_URL="http://localhost:8100"
-  fi
+  API_PORT="9100"
+  LOG_LEVEL="info"
+  MEMORY_SERVER_URL="http://localhost:8100"
 
   # Claude executable path
   CLAUDE_PATH=""
@@ -398,10 +365,6 @@ fi
 step "Phase 5: Generating configuration files"
 
 if [[ "$SKIP_CONFIG" == "false" ]]; then
-  # Create working directory
-  mkdir -p "$WORK_DIR"
-  success "Working directory created: ${WORK_DIR}"
-
   # Generate .env
   {
     echo "# MetaBot Configuration (generated by install.sh)"
@@ -425,7 +388,6 @@ if [[ "$SKIP_CONFIG" == "false" ]]; then
     echo "CLAUDE_DEFAULT_WORKING_DIRECTORY=${WORK_DIR}"
     echo "# CLAUDE_MAX_TURNS="
     echo "# CLAUDE_MAX_BUDGET_USD="
-    echo "# CLAUDE_MODEL="
     echo "LOG_LEVEL=${LOG_LEVEL}"
     if [[ -n "${CLAUDE_PATH:-}" ]]; then
       echo "CLAUDE_EXECUTABLE_PATH=${CLAUDE_PATH}"
@@ -437,10 +399,8 @@ if [[ "$SKIP_CONFIG" == "false" ]]; then
   chmod 600 "$METABOT_HOME/.env"
   success ".env generated"
 
-  # Generate bots.json
+  # Generate bots.json (use node for safe JSON escaping)
   BOTS_JSON="$METABOT_HOME/bots.json"
-
-  # Build JSON using node for proper escaping
   FEISHU_BOTS_JSON="[]"
   TELEGRAM_BOTS_JSON="[]"
 
@@ -457,9 +417,7 @@ if [[ "$SKIP_CONFIG" == "false" ]]; then
 
   if [[ "$SETUP_TELEGRAM" == "true" ]]; then
     TG_NAME="$BOT_NAME"
-    if [[ "$SETUP_FEISHU" == "true" ]]; then
-      TG_NAME="${BOT_NAME}-telegram"
-    fi
+    [[ "$SETUP_FEISHU" == "true" ]] && TG_NAME="${BOT_NAME}-telegram"
     TELEGRAM_BOTS_JSON=$(node -e "
       console.log(JSON.stringify([{
         name: process.argv[1],
@@ -490,10 +448,10 @@ SKILLS_SRC="$HOME/.claude/skills"
 if [[ "$SKIP_CONFIG" == "false" ]]; then
   SKILLS_DEST="$WORK_DIR/.claude/skills"
 else
-  # Read workdir from bots.json if available
   if [[ -f "$METABOT_HOME/bots.json" ]]; then
     WORK_DIR=$(node -e "
-      const cfg = JSON.parse(require('fs').readFileSync('$METABOT_HOME/bots.json','utf-8'));
+      const fs = require('fs');
+      const cfg = JSON.parse(fs.readFileSync('$METABOT_HOME/bots.json','utf-8'));
       const bots = [...(cfg.feishuBots||[]),...(cfg.telegramBots||[])];
       if (bots[0]) console.log(bots[0].defaultWorkingDirectory);
     " 2>/dev/null || echo "")
@@ -522,40 +480,15 @@ else
 fi
 
 # ============================================================================
-# Phase 7: MetaMemory server (optional)
+# Phase 7: Build + Start with PM2
 # ============================================================================
-if [[ "${INSTALL_METAMEMORY:-false}" == "true" ]]; then
-  step "Phase 7: MetaMemory server"
-
-  if command -v docker &>/dev/null; then
-    info "Docker detected. You can start MetaMemory with:"
-    echo "  docker run -d --name metamemory -p 8100:8100 -v metamemory-data:/data xvirobotics/metamemory"
-    echo ""
-    if prompt_yn "Start MetaMemory via Docker now?" "y"; then
-      docker run -d --name metamemory -p 8100:8100 -v metamemory-data:/data xvirobotics/metamemory 2>/dev/null && \
-        success "MetaMemory started via Docker" || \
-        warn "Failed to start MetaMemory. You can start it manually later."
-    fi
-  else
-    warn "Docker not found. MetaMemory server requires Docker or manual Python setup."
-    echo "  See: https://github.com/xvirobotics/metamemory"
-  fi
-else
-  info "Skipping MetaMemory server setup"
-fi
-
-# ============================================================================
-# Phase 8: Start with PM2
-# ============================================================================
-step "Phase 8: Starting MetaBot with PM2"
+step "Phase 7: Starting MetaBot"
 
 cd "$METABOT_HOME"
 
-# Build first
 info "Building TypeScript..."
 npm run build 2>/dev/null && success "Build complete" || warn "Build failed, will use tsx directly via PM2"
 
-# Start or restart with PM2
 if pm2 describe metabot &>/dev/null 2>&1; then
   info "MetaBot already in PM2, restarting..."
   pm2 restart metabot
@@ -568,12 +501,12 @@ pm2 save --force 2>/dev/null || true
 success "MetaBot is running!"
 
 # ============================================================================
-# Phase 9: Summary
+# Phase 8: Summary
 # ============================================================================
 echo ""
 echo -e "${GREEN}${BOLD}"
 echo "  ╔══════════════════════════════════════════╗"
-echo "  ║      MetaBot Genesis - Ready!            ║"
+echo "  ║       MetaBot Genesis — Ready!           ║"
 echo "  ╚══════════════════════════════════════════╝"
 echo -e "${NC}"
 echo ""
@@ -581,7 +514,11 @@ echo -e "  ${BOLD}Installation:${NC}   ${METABOT_HOME}"
 if [[ "${SKIP_CONFIG}" == "false" ]]; then
   echo -e "  ${BOLD}Working Dir:${NC}    ${WORK_DIR}"
   echo -e "  ${BOLD}API:${NC}            http://localhost:${API_PORT}"
-  echo -e "  ${BOLD}API Secret:${NC}     ${API_SECRET:0:8}...${API_SECRET: -4} (in .env)"
+  echo -e "  ${BOLD}API Secret:${NC}     ${API_SECRET:0:8}...${API_SECRET: -4}"
+  echo -e "  ${BOLD}Auth Method:${NC}    ${CLAUDE_AUTH_METHOD}"
+  if [[ "${CLAUDE_AUTH_METHOD}" == "third_party" ]]; then
+    echo -e "  ${BOLD}Provider:${NC}       ${PROVIDER_NAME}"
+  fi
 fi
 echo ""
 echo -e "  ${BOLD}Commands:${NC}"
@@ -589,28 +526,21 @@ echo "    pm2 logs metabot          # View logs"
 echo "    pm2 restart metabot       # Restart"
 echo "    pm2 stop metabot          # Stop"
 echo ""
-echo -e "  ${BOLD}Self-Replication:${NC}"
-echo "    Create new bots from chat by asking the Genesis Bot,"
-echo "    or via API: POST /api/bots"
-echo ""
 if [[ "${SKIP_CONFIG}" == "false" ]]; then
-  echo -e "  ${BOLD}Auth Method:${NC}    ${CLAUDE_AUTH_METHOD}"
-  if [[ "${CLAUDE_AUTH_METHOD}" == "third_party" ]]; then
-    echo -e "  ${BOLD}Provider:${NC}       ${PROVIDER_NAME} (${PROVIDER_BASE_URL})"
-  fi
-  echo ""
   echo -e "  ${BOLD}Next Steps:${NC}"
   STEP_NUM=1
   if [[ "${CLAUDE_AUTH_METHOD}" == "subscription" ]]; then
-    echo "    ${STEP_NUM}. Run 'claude login' in a separate terminal to authenticate"
+    echo "    ${STEP_NUM}. Run 'claude login' in a separate terminal"
     STEP_NUM=$((STEP_NUM + 1))
   fi
   if [[ "$SETUP_FEISHU" == "true" ]]; then
-    echo "    ${STEP_NUM}. Open Feishu and message your bot to test"
+    echo "    ${STEP_NUM}. Configure Feishu app: enable long-connection events + im.message.receive_v1 + publish"
+    STEP_NUM=$((STEP_NUM + 1))
+    echo "    ${STEP_NUM}. Open Feishu and message your bot"
     STEP_NUM=$((STEP_NUM + 1))
   fi
   if [[ "${SETUP_TELEGRAM:-false}" == "true" ]]; then
-    echo "    ${STEP_NUM}. Open Telegram and message your bot to test"
+    echo "    ${STEP_NUM}. Open Telegram and message your bot — it's ready now!"
     STEP_NUM=$((STEP_NUM + 1))
   fi
   echo "    ${STEP_NUM}. Check logs: pm2 logs metabot"
