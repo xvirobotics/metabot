@@ -4,6 +4,23 @@
 
 const API = '';  // same origin
 
+// ── Auth token ──
+// Pass token via ?token=xxx in URL — saved to localStorage for subsequent visits.
+(function initToken() {
+  const params = new URLSearchParams(window.location.search);
+  const t = params.get('token');
+  if (t) {
+    localStorage.setItem('memory_token', t);
+    // Clean token from URL bar
+    window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+  }
+})();
+
+function getAuthHeaders() {
+  const token = localStorage.getItem('memory_token');
+  return token ? { 'Authorization': `Bearer ${token}` } : {};
+}
+
 // ── State ──
 
 let folderTree = null;
@@ -16,7 +33,7 @@ let expandedFolders = new Set(['root']);  // track which folders are expanded
 
 async function api(path, options = {}) {
   const res = await fetch(`${API}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders(), ...options.headers },
     ...options,
   });
   if (!res.ok) {
