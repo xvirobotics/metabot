@@ -36,12 +36,17 @@ export class MemoryClient {
   constructor(
     private baseUrl: string,
     private logger: Logger,
+    private secret?: string,
   ) {}
 
   private async request<T>(path: string, options?: RequestInit): Promise<T> {
     const url = `${this.baseUrl}${path}`;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.secret) {
+      headers['Authorization'] = `Bearer ${this.secret}`;
+    }
     const res = await fetch(url, {
-      headers: { 'Content-Type': 'application/json', ...options?.headers },
+      headers: { ...headers, ...options?.headers },
       ...options,
     });
     if (!res.ok) {

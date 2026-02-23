@@ -56,11 +56,12 @@ export class MessageBridge {
     private logger: Logger,
     private sender: IMessageSender,
     memoryServerUrl: string,
+    memorySecret?: string,
   ) {
     this.executor = new ClaudeExecutor(config, logger);
     this.sessionManager = new SessionManager(config.claude.defaultWorkingDirectory, logger, config.name);
     this.outputsManager = new OutputsManager(config.claude.outputsBaseDir, logger);
-    this.memoryClient = new MemoryClient(memoryServerUrl, logger);
+    this.memoryClient = new MemoryClient(memoryServerUrl, logger, memorySecret);
   }
 
   setApiPort(port: number): void {

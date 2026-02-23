@@ -22,7 +22,7 @@ interface FeishuBotHandle {
   sender: IMessageSender;
 }
 
-async function startFeishuBot(botConfig: BotConfig, logger: Logger, memoryServerUrl: string): Promise<FeishuBotHandle> {
+async function startFeishuBot(botConfig: BotConfig, logger: Logger, memoryServerUrl: string, memorySecret?: string): Promise<FeishuBotHandle> {
   const botLogger = logger.child({ bot: botConfig.name });
 
   botLogger.info('Starting Feishu bot...');
@@ -51,7 +51,7 @@ async function startFeishuBot(botConfig: BotConfig, logger: Logger, memoryServer
   // Create sender and bridge (FeishuSenderAdapter wraps the Feishu-specific MessageSender)
   const rawSender = new MessageSender(client, botLogger);
   const sender = new FeishuSenderAdapter(rawSender);
-  const bridge = new MessageBridge(botConfig, botLogger, sender, memoryServerUrl);
+  const bridge = new MessageBridge(botConfig, botLogger, sender, memoryServerUrl, memorySecret);
 
   // Create event dispatcher wired to the bridge
   const dispatcher = createEventDispatcher(botConfig, botLogger, (msg) => {
@@ -85,6 +85,11 @@ async function main() {
   const appConfig = loadAppConfig();
   const logger = createLogger(appConfig.log.level);
 
+  // Ensure MEMORY_SECRET env var is available for Claude subprocesses (used by metamemory skill)
+  if (appConfig.memory.secret && !process.env.MEMORY_SECRET) {
+    process.env.MEMORY_SECRET = appConfig.memory.secret;
+  }
+
   const feishuCount = appConfig.feishuBots.length;
   const telegramCount = appConfig.telegramBots.length;
   logger.info({ feishuBots: feishuCount, telegramBots: telegramCount, memoryServerUrl: appConfig.memoryServerUrl }, 'Starting MetaBot bridge...');
@@ -94,11 +99,11 @@ async function main() {
 
   // Start all bots in parallel
   const feishuHandles: FeishuBotHandle[] = feishuCount > 0
-    ? await Promise.all(appConfig.feishuBots.map((bot) => startFeishuBot(bot, logger, appConfig.memoryServerUrl)))
+    ? await Promise.all(appConfig.feishuBots.map((bot) => startFeishuBot(bot, logger, appConfig.memoryServerUrl, appConfig.memory.secret || undefined)))
     : [];
 
   const telegramHandles: TelegramBotHandle[] = telegramCount > 0
-    ? await Promise.all(appConfig.telegramBots.map((bot) => startTelegramBot(bot, logger, appConfig.memoryServerUrl)))
+    ? await Promise.all(appConfig.telegramBots.map((bot) => startTelegramBot(bot, logger, appConfig.memoryServerUrl, appConfig.memory.secret || undefined)))
     : [];
 
   // Register all bots in the registry and set API port/secret on bridges

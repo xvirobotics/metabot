@@ -264,7 +264,7 @@ export function loadAppConfig(): AppConfig {
   const memoryEnabled = process.env.MEMORY_ENABLED !== 'false';
   const memoryPort = process.env.MEMORY_PORT ? parseInt(process.env.MEMORY_PORT, 10) : 8100;
   const memoryDatabaseDir = process.env.MEMORY_DATABASE_DIR || './data';
-  const memorySecret = process.env.MEMORY_SECRET || '';
+  const memorySecret = process.env.MEMORY_SECRET || process.env.API_SECRET || '';
 
   return {
     feishuBots,
