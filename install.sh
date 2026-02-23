@@ -182,9 +182,12 @@ if [[ -d "$METABOT_HOME/.git" ]]; then
     export METABOT_REEXEC=1
     exec bash "$METABOT_HOME/install.sh"
   fi
+  # Ensure submodules are initialized and up-to-date
+  info "Updating submodules..."
+  git submodule update --init --recursive
 else
   info "Cloning MetaBot..."
-  git clone "$METABOT_REPO" "$METABOT_HOME"
+  git clone --recursive "$METABOT_REPO" "$METABOT_HOME"
   cd "$METABOT_HOME"
 fi
 success "MetaBot code ready at ${METABOT_HOME}"
@@ -448,33 +451,29 @@ if [[ "$SKIP_CONFIG" == "false" ]]; then
 fi
 
 # ============================================================================
-# Phase 6: Install skills (git clone from independent repos)
+# Phase 6: Install skills (delegate to each submodule's install.sh)
 # ============================================================================
 step "Phase 6: Installing skills"
 
 SKILLS_DIR="$HOME/.claude/skills"
 mkdir -p "$SKILLS_DIR"
 
-# metaskill: clone repo to ~/metaskill, then extract skill/ to ~/.claude/skills/metaskill
-METASKILL_HOME="${METASKILL_HOME:-$HOME/metaskill}"
-if [[ -d "$METASKILL_HOME/.git" ]]; then
-  info "metaskill repo exists, pulling latest..."
-  (cd "$METASKILL_HOME" && git pull --ff-only) || warn "metaskill pull failed, using existing"
+# Install metaskill — delegates to its own install.sh
+if [[ -f "$METABOT_HOME/submodules/metaskill/install.sh" ]]; then
+  info "Installing metaskill skill..."
+  bash "$METABOT_HOME/submodules/metaskill/install.sh"
+  success "metaskill skill installed → $SKILLS_DIR/metaskill"
 else
-  info "Cloning metaskill..."
-  if git clone https://github.com/xvirobotics/metaskill.git "$METASKILL_HOME" 2>/dev/null; then
-    success "metaskill cloned → $METASKILL_HOME"
-  else
-    warn "Failed to clone metaskill (network issue or repo not accessible)"
-  fi
+  warn "metaskill submodule not found, skipping"
 fi
-# Extract skill files to ~/.claude/skills/metaskill
-if [[ -d "$METASKILL_HOME/skill" ]]; then
-  mkdir -p "$SKILLS_DIR/metaskill"
-  cp -r "$METASKILL_HOME/skill/." "$SKILLS_DIR/metaskill/"
-  success "Installed metaskill skill → $SKILLS_DIR/metaskill"
-elif [[ -d "$METASKILL_HOME" ]]; then
-  warn "metaskill repo missing skill/ directory"
+
+# Install metamemory skill — delegates to its own install.sh
+if [[ -f "$METABOT_HOME/submodules/metamemory/install.sh" ]]; then
+  info "Installing metamemory skill..."
+  bash "$METABOT_HOME/submodules/metamemory/install.sh"
+  success "metamemory skill installed → $SKILLS_DIR/metamemory"
+else
+  warn "metamemory submodule not found, skipping"
 fi
 
 # Determine working directory for skill deployment
@@ -498,17 +497,21 @@ else
   fi
 fi
 
-# Copy skills from ~/.claude/skills to bot working directory
+# Copy skills to bot working directory
 if [[ -n "${SKILLS_DEST:-}" ]]; then
   for SKILL in metaskill metamemory; do
     if [[ -d "$SKILLS_DIR/$SKILL" ]]; then
       mkdir -p "$SKILLS_DEST/$SKILL"
       cp -r "$SKILLS_DIR/$SKILL/." "$SKILLS_DEST/$SKILL/"
-      success "Installed $SKILL → $SKILLS_DEST/$SKILL"
+      success "Deployed $SKILL → $SKILLS_DEST/$SKILL"
     else
-      warn "Skill $SKILL not found in $SKILLS_DIR, skipping"
+      warn "Skill $SKILL not found in $SKILLS_DIR, skipping workdir deploy"
     fi
   done
+  # Also install metamemory to bot workdir via its install.sh (handles cleanup)
+  if [[ -f "$METABOT_HOME/submodules/metamemory/install.sh" ]]; then
+    bash "$METABOT_HOME/submodules/metamemory/install.sh" "$SKILLS_DEST/metamemory"
+  fi
 else
   warn "Could not determine working directory, skipping skill deployment to workdir"
 fi
@@ -519,10 +522,9 @@ fi
 step "Phase 7: MetaMemory Server"
 
 METAMEMORY_INSTALLED=false
+METAMEMORY_HOME="$METABOT_HOME/submodules/metamemory"
 
 if prompt_yn "Install MetaMemory server (knowledge persistence)?"; then
-
-  METAMEMORY_HOME="${METAMEMORY_HOME:-$HOME/metamemory}"
 
   # 7a. Check Python 3.8+
   if command -v python3 &>/dev/null; then
@@ -534,109 +536,55 @@ if prompt_yn "Install MetaMemory server (knowledge persistence)?"; then
     else
       error "Python ${PY_VER} found, but 3.8+ is required."
       warn "Skipping MetaMemory installation."
-      METAMEMORY_INSTALLED=false
     fi
   else
     error "Python 3 not found."
     echo "  Install: https://www.python.org/downloads/ or use your package manager"
     warn "Skipping MetaMemory installation."
-    METAMEMORY_INSTALLED=false
   fi
 
-  # Only continue if Python check passed (not explicitly set to false above after check)
+  # Only continue if Python 3.8+ is available
   if command -v python3 &>/dev/null; then
     PY_MAJOR="$(python3 -c 'import sys; print(sys.version_info.major)')"
     PY_MINOR="$(python3 -c 'import sys; print(sys.version_info.minor)')"
     if [[ "$PY_MAJOR" -ge 3 && "$PY_MINOR" -ge 8 ]]; then
 
-      # 7b. Clone or update xvirobotics/metamemory
-      if [[ -d "$METAMEMORY_HOME/.git" ]]; then
-        info "MetaMemory repo exists, pulling latest..."
-        (cd "$METAMEMORY_HOME" && git pull --ff-only) || warn "MetaMemory pull failed, using existing"
+      # 7b. Check submodule is present
+      if [[ ! -d "$METAMEMORY_HOME/server" ]]; then
+        warn "MetaMemory submodule not found at $METAMEMORY_HOME"
+        warn "Run: git submodule update --init --recursive"
       else
-        info "Cloning MetaMemory..."
-        git clone https://github.com/xvirobotics/metamemory.git "$METAMEMORY_HOME"
-      fi
 
-      # 7c. Create venv + pip install
-      # The metamemory repo has its server code under server/ with its own requirements.txt
-      cd "$METAMEMORY_HOME"
-      if [[ ! -d "venv" ]]; then
-        info "Creating Python virtual environment..."
-        python3 -m venv venv
-      fi
-      info "Installing Python dependencies..."
-      source venv/bin/activate
-      if [[ -f "server/requirements.txt" ]]; then
-        pip install -r server/requirements.txt -q
-      elif [[ -f "requirements.txt" ]]; then
-        pip install -r requirements.txt -q
-      elif [[ -f "pyproject.toml" ]]; then
-        pip install -e . -q
-      else
-        warn "No requirements.txt or pyproject.toml found, skipping pip install"
-      fi
-      deactivate
-      success "MetaMemory dependencies installed"
-
-      # 7d. Extract metamemory SKILL.md to ~/.claude/skills/metamemory/
-      # Check common locations for the skill file in the metamemory repo
-      SKILL_EXTRACTED=false
-      for SKILL_PATH in skill skills/metamemory skill/metamemory; do
-        if [[ -d "$METAMEMORY_HOME/$SKILL_PATH" && -f "$METAMEMORY_HOME/$SKILL_PATH/SKILL.md" ]]; then
-          mkdir -p "$SKILLS_DIR/metamemory"
-          cp -r "$METAMEMORY_HOME/$SKILL_PATH/." "$SKILLS_DIR/metamemory/"
-          success "Extracted metamemory skill → $SKILLS_DIR/metamemory"
-          SKILL_EXTRACTED=true
-          break
+        # 7c. Create venv + pip install
+        cd "$METAMEMORY_HOME"
+        if [[ ! -d "venv" ]]; then
+          info "Creating Python virtual environment..."
+          python3 -m venv venv
         fi
-      done
-      # Fallback: check for SKILL.md at repo root
-      if [[ "$SKILL_EXTRACTED" == "false" && -f "$METAMEMORY_HOME/SKILL.md" ]]; then
-        mkdir -p "$SKILLS_DIR/metamemory"
-        cp "$METAMEMORY_HOME/SKILL.md" "$SKILLS_DIR/metamemory/SKILL.md"
-        success "Extracted metamemory skill → $SKILLS_DIR/metamemory"
-        SKILL_EXTRACTED=true
-      fi
-      if [[ "$SKILL_EXTRACTED" == "false" ]]; then
-        warn "Could not find SKILL.md in metamemory repo"
-      fi
-
-      # Also copy to bot working directory if available
-      if [[ -n "${SKILLS_DEST:-}" && -d "$SKILLS_DIR/metamemory" ]]; then
-        mkdir -p "$SKILLS_DEST/metamemory"
-        cp -r "$SKILLS_DIR/metamemory/." "$SKILLS_DEST/metamemory/"
-        success "Deployed metamemory skill → $SKILLS_DEST/metamemory"
-      fi
-
-      # 7e. Start MetaMemory via PM2
-      # The metamemory repo structure: server/app/main.py → uvicorn app.main:app --cwd server/
-      METAMEMORY_ENTRY=""
-      METAMEMORY_CWD="$METAMEMORY_HOME"
-      if [[ -f "$METAMEMORY_HOME/server/app/main.py" ]]; then
-        METAMEMORY_ENTRY="app.main:app"
-        METAMEMORY_CWD="$METAMEMORY_HOME/server"
-      elif [[ -f "$METAMEMORY_HOME/main.py" ]]; then
-        METAMEMORY_ENTRY="main:app"
-      elif [[ -f "$METAMEMORY_HOME/app.py" ]]; then
-        METAMEMORY_ENTRY="app:app"
-      elif [[ -f "$METAMEMORY_HOME/server.py" ]]; then
-        METAMEMORY_ENTRY="server:app"
-      fi
-
-      if [[ -n "$METAMEMORY_ENTRY" ]]; then
-        if pm2 describe metamemory &>/dev/null 2>&1; then
-          info "MetaMemory already in PM2, restarting..."
-          pm2 restart metamemory
+        info "Installing Python dependencies..."
+        source venv/bin/activate
+        if [[ -f "server/requirements.txt" ]]; then
+          pip install -r server/requirements.txt -q
+        elif [[ -f "requirements.txt" ]]; then
+          pip install -r requirements.txt -q
         else
-          info "Starting MetaMemory with PM2..."
-          pm2 start "$METAMEMORY_HOME/venv/bin/python" \
-            --name metamemory \
-            --cwd "$METAMEMORY_CWD" \
-            -- -m uvicorn "$METAMEMORY_ENTRY" --host 0.0.0.0 --port 8100
+          warn "No requirements.txt found, skipping pip install"
         fi
+        deactivate
+        success "MetaMemory dependencies installed"
 
-        # 7f. Health check
+        # 7d. Start MetaMemory via PM2
+        if pm2 describe metamemory &>/dev/null 2>&1; then
+          info "MetaMemory already in PM2, deleting stale process..."
+          pm2 delete metamemory 2>/dev/null || true
+        fi
+        info "Starting MetaMemory with PM2..."
+        pm2 start "$METAMEMORY_HOME/venv/bin/python" \
+          --name metamemory \
+          --cwd "$METAMEMORY_HOME/server" \
+          -- -m uvicorn app.main:app --host 0.0.0.0 --port 8100
+
+        # 7e. Health check
         sleep 3
         if curl -sf http://localhost:8100/api/health &>/dev/null || curl -sf http://localhost:8100/health &>/dev/null; then
           success "MetaMemory server is running on port 8100"
@@ -645,12 +593,8 @@ if prompt_yn "Install MetaMemory server (knowledge persistence)?"; then
           warn "MetaMemory started but health check failed. Check: pm2 logs metamemory"
           METAMEMORY_INSTALLED=true
         fi
-      else
-        warn "Could not detect MetaMemory entry point"
-        warn "You may need to start MetaMemory manually."
-        METAMEMORY_INSTALLED=true
-      fi
 
+      fi
     fi
   fi
 
