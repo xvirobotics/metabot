@@ -555,6 +555,63 @@ fi
 METAMEMORY_INSTALLED=true
 success "MetaMemory will start automatically with MetaBot on port 8100"
 
+# Install mm() shell shortcut for MetaMemory CLI
+BASH_ALIASES="$HOME/.bash_aliases"
+if ! grep -q 'mm()' "$BASH_ALIASES" 2>/dev/null; then
+  info "Installing mm() shell shortcut..."
+  cat >> "$BASH_ALIASES" << 'MMEOF'
+
+# MetaMemory shortcuts (installed by MetaBot)
+export MEMORY_URL="http://localhost:8100"
+export MEMORY_AUTH="Authorization: Bearer ${API_SECRET:-changeme}"
+
+mm() {
+  local cmd="${1:-help}"
+  shift 2>/dev/null
+  case "$cmd" in
+    search|s)
+      curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/search?q=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$*'))")"
+      ;;
+    get|g)
+      curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/documents/$1"
+      ;;
+    list|ls)
+      curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/documents?folder_id=${1:-root}&limit=50"
+      ;;
+    folders|f)
+      curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/folders"
+      ;;
+    create|c)
+      local title="$1"; shift
+      local content="$*"
+      curl -s -X POST "$MEMORY_URL/api/documents" \
+        -H "$MEMORY_AUTH" -H "Content-Type: application/json" \
+        -d "{\"title\":\"$title\",\"folder_id\":\"root\",\"content\":\"$content\"}"
+      ;;
+    health|h)
+      curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/health"
+      ;;
+    *)
+      echo "mm - MetaMemory CLI"
+      echo "  mm search <query>       - Search documents"
+      echo "  mm get <doc_id>         - Get document by ID"
+      echo "  mm list [folder_id]     - List documents (default: root)"
+      echo "  mm folders              - List folder tree"
+      echo "  mm create <title> <md>  - Create a document"
+      echo "  mm health               - Health check"
+      ;;
+  esac
+}
+MMEOF
+  # Patch the actual API_SECRET into the file
+  if [[ -n "${API_SECRET:-}" ]]; then
+    sed -i "s|\${API_SECRET:-changeme}|${API_SECRET}|g" "$BASH_ALIASES"
+  fi
+  success "mm() shortcut installed → $BASH_ALIASES"
+else
+  info "mm() shortcut already exists, skipping"
+fi
+
 # ============================================================================
 # Phase 8: Build + Start MetaBot with PM2
 # ============================================================================
@@ -605,7 +662,8 @@ echo "    pm2 logs metabot          # View MetaBot logs"
 echo "    pm2 restart metabot       # Restart MetaBot"
 echo "    pm2 stop metabot          # Stop MetaBot"
 if [[ "$METAMEMORY_INSTALLED" == "true" ]]; then
-  echo "    # MetaMemory logs are included in metabot logs (embedded server)"
+  echo "    mm search <query>         # Search MetaMemory"
+  echo "    mm folders                # Browse knowledge tree"
 fi
 echo ""
 if [[ "${SKIP_CONFIG}" == "false" ]]; then

@@ -14,46 +14,27 @@ Server URL: !`echo ${MEMORY_SERVER_URL:-http://localhost:8100}`
 - You need context from previous sessions or other agents' work
 - After completing research or analysis that should be shared
 
-### Authentication
+### Quick Commands (mm shortcut)
 
-All API requests require a Bearer token if the server has authentication enabled.
-The token is available via the `MEMORY_SECRET` environment variable.
+The `mm` shell function is pre-installed and handles auth automatically. **Prefer `mm` over raw curl for read operations:**
 
-**Auth header** (include in all curl commands):
-```
--H "Authorization: Bearer $MEMORY_SECRET"
-```
-
-### API Quick Reference
-
-**List folder tree:**
 ```bash
-curl -s -H "Authorization: Bearer $MEMORY_SECRET" $MEMORY_SERVER_URL/api/folders
+mm search <query>       # Search documents
+mm get <doc_id>         # Get document by ID
+mm list [folder_id]     # List documents (default: root)
+mm folders              # Browse folder tree
+mm create <title> <md>  # Create a document (simple)
+mm health               # Health check
 ```
 
-**Search documents:**
-```bash
-curl -s -H "Authorization: Bearer $MEMORY_SECRET" "$MEMORY_SERVER_URL/api/search?q=QUERY"
-```
+### API Reference (for complex operations)
 
-**Get document:**
-```bash
-curl -s -H "Authorization: Bearer $MEMORY_SECRET" $MEMORY_SERVER_URL/api/documents/DOC_ID
-```
-
-**Get document by path:**
-```bash
-curl -s -H "Authorization: Bearer $MEMORY_SECRET" "$MEMORY_SERVER_URL/api/documents/by-path?path=/folder/doc-slug"
-```
-
-**List documents in folder:**
-```bash
-curl -s -H "Authorization: Bearer $MEMORY_SECRET" "$MEMORY_SERVER_URL/api/documents?folder_id=FOLDER_ID&limit=50"
-```
+For create/update with full control (tags, folder, etc.), use the API directly.
+Auth header: `-H "Authorization: Bearer $MEMORY_SECRET"`
 
 **Create document:**
 ```bash
-curl -s -X POST $MEMORY_SERVER_URL/api/documents \
+curl -s -X POST ${MEMORY_SERVER_URL:-http://localhost:8100}/api/documents \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $MEMORY_SECRET" \
   -d '{"title":"Doc Title", "folder_id":"root", "content":"# Markdown content...", "tags":["tag1"], "created_by":"bot-name"}'
@@ -61,15 +42,20 @@ curl -s -X POST $MEMORY_SERVER_URL/api/documents \
 
 **Update document:**
 ```bash
-curl -s -X PUT $MEMORY_SERVER_URL/api/documents/DOC_ID \
+curl -s -X PUT ${MEMORY_SERVER_URL:-http://localhost:8100}/api/documents/DOC_ID \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $MEMORY_SECRET" \
   -d '{"content":"# Updated content..."}'
 ```
 
+**Get document by path:**
+```bash
+curl -s -H "Authorization: Bearer $MEMORY_SECRET" "${MEMORY_SERVER_URL:-http://localhost:8100}/api/documents/by-path?path=/folder/doc-slug"
+```
+
 **Create folder:**
 ```bash
-curl -s -X POST $MEMORY_SERVER_URL/api/folders \
+curl -s -X POST ${MEMORY_SERVER_URL:-http://localhost:8100}/api/folders \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $MEMORY_SECRET" \
   -d '{"name":"folder-name", "parent_id":"root"}'
@@ -77,18 +63,13 @@ curl -s -X POST $MEMORY_SERVER_URL/api/folders \
 
 **Delete document:**
 ```bash
-curl -s -H "Authorization: Bearer $MEMORY_SECRET" -X DELETE $MEMORY_SERVER_URL/api/documents/DOC_ID
-```
-
-**Health check:**
-```bash
-curl -s -H "Authorization: Bearer $MEMORY_SECRET" $MEMORY_SERVER_URL/api/health
+curl -s -H "Authorization: Bearer $MEMORY_SECRET" -X DELETE ${MEMORY_SERVER_URL:-http://localhost:8100}/api/documents/DOC_ID
 ```
 
 ### Guidelines
 - Write documents as structured Markdown with clear headings
 - Use descriptive titles and relevant tags
 - Organize into folders by project or topic
-- Before creating, search first to avoid duplicates
+- Before creating, search first to avoid duplicates (`mm search <query>`)
 - Update existing docs rather than creating new ones when appropriate
 - Include created_by to track which agent wrote the document

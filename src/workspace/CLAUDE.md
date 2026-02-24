@@ -14,7 +14,16 @@ Create AI agent teams, individual agents, or custom skills for any project.
 ```
 
 ### /metamemory — Shared Knowledge Store
-Read and write persistent memory documents across sessions. Use this to save research findings, project notes, and knowledge that should survive session resets.
+Read and write persistent memory documents across sessions. Use the `mm` shell shortcut for quick operations:
+
+```bash
+mm search <query>       # Search documents
+mm get <doc_id>         # Get document by ID
+mm list [folder_id]     # List documents
+mm folders              # Browse folder tree
+```
+
+For full API (create with tags, update, delete), use the `/metamemory` skill.
 
 ### /metabot-api — Agent Bus, Scheduling & Bot Management
 Delegate tasks to other bots, schedule future tasks, and create/remove bots via the MetaBot HTTP API.
