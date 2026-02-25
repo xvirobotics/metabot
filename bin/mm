@@ -5,19 +5,51 @@
 set -euo pipefail
 
 # --- Config: env vars > .env file > defaults ---
-if [[ -z "${MEMORY_URL:-}" ]]; then
-  METABOT_ENV="${METABOT_HOME:-$HOME/metabot}/.env"
-  if [[ -f "$METABOT_ENV" ]]; then
-    _secret=$(grep -oP '^API_SECRET=\K.*' "$METABOT_ENV" 2>/dev/null || true)
-  fi
-  MEMORY_URL="http://localhost:8100"
+# Locate .env: METABOT_HOME > ~/feishu-claudecode > ~/metabot > script dir
+_find_env() {
+  for d in "${METABOT_HOME:-}" "$HOME/feishu-claudecode" "$HOME/metabot"; do
+    [[ -n "$d" && -f "$d/.env" ]] && echo "$d/.env" && return
+  done
+  # Fallback: relative to this script's install location
+  local sd; sd="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
+  [[ -f "$sd/.env" ]] && echo "$sd/.env" && return
+  echo ""
+}
+METABOT_ENV="$(_find_env)"
+if [[ -n "$METABOT_ENV" && -f "$METABOT_ENV" ]]; then
+  _admin_token=$(grep -oP '^MEMORY_ADMIN_TOKEN=\K.*' "$METABOT_ENV" 2>/dev/null || true)
+  _reader_token=$(grep -oP '^MEMORY_TOKEN=\K.*' "$METABOT_ENV" 2>/dev/null || true)
+  _secret=$(grep -oP '^API_SECRET=\K.*' "$METABOT_ENV" 2>/dev/null || true)
 fi
+MEMORY_URL="${MEMORY_URL:-http://localhost:8100}"
+
+# Token priority: MEMORY_ADMIN_TOKEN > MEMORY_TOKEN > API_SECRET
+# Each level checks env var first, then .env fallback
 if [[ -z "${MEMORY_AUTH:-}" ]]; then
-  _secret="${_secret:-${API_SECRET:-changeme}}"
-  MEMORY_AUTH="Authorization: Bearer $_secret"
+  _token="${MEMORY_ADMIN_TOKEN:-${_admin_token:-}}"
+  if [[ -z "$_token" ]]; then
+    _token="${MEMORY_TOKEN:-${_reader_token:-}}"
+  fi
+  if [[ -z "$_token" ]]; then
+    _token="${API_SECRET:-${_secret:-}}"
+  fi
+  if [[ -n "$_token" ]]; then
+    MEMORY_AUTH="Authorization: Bearer $_token"
+  else
+    MEMORY_AUTH=""
+  fi
 fi
 
 _json() { python3 -m json.tool 2>/dev/null || cat; }
+
+# curl wrapper that adds auth header only if set
+_curl() {
+  if [[ -n "$MEMORY_AUTH" ]]; then
+    curl -s -H "$MEMORY_AUTH" "$@"
+  else
+    curl -s "$@"
+  fi
+}
 
 # Build JSON safely using python3 to handle escaping
 _jsonify() {
@@ -30,21 +62,21 @@ shift 2>/dev/null || true
 case "$cmd" in
   search|s)
     query=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(' '.join(sys.argv[1:])))" "$@" 2>/dev/null || echo "$*")
-    curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/search?q=$query" | _json
+    _curl "$MEMORY_URL/api/search?q=$query" | _json
     ;;
   get|g)
-    curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/documents/$1" | _json
+    _curl "$MEMORY_URL/api/documents/$1" | _json
     ;;
   path|p)
     # Get document by path, e.g.: mm path /metabot/weekly-updates
     path=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(' '.join(sys.argv[1:])))" "$@" 2>/dev/null || echo "$*")
-    curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/documents/by-path?path=$path" | _json
+    _curl "$MEMORY_URL/api/documents/by-path?path=$path" | _json
     ;;
   list|ls)
-    curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/documents?folder_id=${1:-root}&limit=50" | _json
+    _curl "$MEMORY_URL/api/documents?folder_id=${1:-root}&limit=50" | _json
     ;;
   folders|f)
-    curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/folders" | _json
+    _curl "$MEMORY_URL/api/folders" | _json
     ;;
 
   # --- Create document ---
@@ -92,8 +124,8 @@ if by:
     payload['created_by'] = by
 print(json.dumps(payload))
 " "$_title" "$_folder" "$_content" "$_tags" "$_by" | \
-    curl -s -X POST "$MEMORY_URL/api/documents" \
-      -H "$MEMORY_AUTH" -H "Content-Type: application/json" \
+    _curl -X POST "$MEMORY_URL/api/documents" \
+      -H "Content-Type: application/json" \
       -d @- | _json
     ;;
 
@@ -135,8 +167,8 @@ if not payload:
     sys.exit(1)
 print(json.dumps(payload))
 " "$_content" "$_title" "$_tags" | \
-    curl -s -X PUT "$MEMORY_URL/api/documents/$_doc_id" \
-      -H "$MEMORY_AUTH" -H "Content-Type: application/json" \
+    _curl -X PUT "$MEMORY_URL/api/documents/$_doc_id" \
+      -H "Content-Type: application/json" \
       -d @- | _json
     ;;
 
@@ -153,8 +185,8 @@ print(json.dumps(payload))
 import json, sys
 print(json.dumps({'name': sys.argv[1], 'parent_id': sys.argv[2]}))
 " "$_name" "$_parent" | \
-    curl -s -X POST "$MEMORY_URL/api/folders" \
-      -H "$MEMORY_AUTH" -H "Content-Type: application/json" \
+    _curl -X POST "$MEMORY_URL/api/folders" \
+      -H "Content-Type: application/json" \
       -d @- | _json
     ;;
 
@@ -164,11 +196,11 @@ print(json.dumps({'name': sys.argv[1], 'parent_id': sys.argv[2]}))
       echo "Usage: mm delete <doc_id>"
       exit 1
     fi
-    curl -s -X DELETE "$MEMORY_URL/api/documents/$1" -H "$MEMORY_AUTH" | _json
+    _curl -X DELETE "$MEMORY_URL/api/documents/$1" | _json
     ;;
 
   health|h)
-    curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/health" | _json
+    _curl "$MEMORY_URL/api/health" | _json
     ;;
 
   *)
