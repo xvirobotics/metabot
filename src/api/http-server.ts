@@ -5,6 +5,7 @@ import type { BotRegistry } from './bot-registry.js';
 import type { TaskScheduler } from '../scheduler/task-scheduler.js';
 import { addBot, removeBot, getBotEntry } from './bots-config-writer.js';
 import { installSkillsToWorkDir } from './skills-installer.js';
+import { metrics } from '../utils/metrics.js';
 
 interface ApiServerOptions {
   port: number;
@@ -398,6 +399,28 @@ export function startApiServer(options: ApiServerOptions): http.Server {
             throw err;
           }
         }
+        return;
+      }
+
+      // Route: GET /api/stats — cost and usage aggregation
+      if (method === 'GET' && url === '/api/stats') {
+        const stats: Record<string, unknown> = {};
+        for (const bot of registry.list()) {
+          const registered = registry.get(bot.name);
+          if (registered?.bridge?.costTracker) {
+            stats[bot.name] = registered.bridge.costTracker.getStats();
+          }
+        }
+        jsonResponse(res, 200, stats);
+        return;
+      }
+
+      // Route: GET /api/metrics — Prometheus exposition format
+      if (method === 'GET' && url === '/api/metrics') {
+        metrics.setGauge('metabot_uptime_seconds', Math.floor((Date.now() - startTime) / 1000));
+        const body = metrics.serialize();
+        res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' });
+        res.end(body);
         return;
       }
 

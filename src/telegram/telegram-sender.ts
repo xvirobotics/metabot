@@ -1,5 +1,4 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as https from 'node:https';
 import * as http from 'node:http';
 import { Bot, InputFile } from 'grammy';

@@ -5,12 +5,16 @@ import type { Logger } from '../utils/logger.js';
 import type { IncomingMessage, CardState, PendingQuestion } from '../types.js';
 import type { IMessageSender } from './message-sender.interface.js';
 import { ClaudeExecutor, type ExecutionHandle } from '../claude/executor.js';
-import { StreamProcessor, extractImagePaths } from '../claude/stream-processor.js';
+import { StreamProcessor } from '../claude/stream-processor.js';
 import { SessionManager } from '../claude/session-manager.js';
 import { RateLimiter } from './rate-limiter.js';
 import { OutputsManager } from './outputs-manager.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { AuditLogger } from '../utils/audit-logger.js';
+import { CommandHandler } from './command-handler.js';
+import { OutputHandler } from './output-handler.js';
+import { CostTracker } from '../utils/cost-tracker.js';
+import { metrics } from '../utils/metrics.js';
 
 const TASK_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
 const QUESTION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes for user to answer
@@ -51,8 +55,10 @@ export class MessageBridge {
   private executor: ClaudeExecutor;
   private sessionManager: SessionManager;
   private outputsManager: OutputsManager;
-  private memoryClient: MemoryClient;
   private audit: AuditLogger;
+  private commandHandler: CommandHandler;
+  private outputHandler: OutputHandler;
+  readonly costTracker: CostTracker;
   private runningTasks = new Map<string, RunningTask>(); // keyed by chatId
   private messageQueues = new Map<string, IncomingMessage[]>(); // per-chatId message queue
 
@@ -66,13 +72,31 @@ export class MessageBridge {
     this.executor = new ClaudeExecutor(config, logger);
     this.sessionManager = new SessionManager(config.claude.defaultWorkingDirectory, logger, config.name);
     this.outputsManager = new OutputsManager(config.claude.outputsBaseDir, logger);
-    this.memoryClient = new MemoryClient(memoryServerUrl, logger, memorySecret);
     this.audit = new AuditLogger(logger);
-  }
+    this.costTracker = new CostTracker();
 
+    const memoryClient = new MemoryClient(memoryServerUrl, logger, memorySecret);
+
+    this.commandHandler = new CommandHandler(
+      config, logger, sender, this.sessionManager, memoryClient, this.audit,
+      (chatId) => this.runningTasks.get(chatId),
+      (chatId) => this.stopTask(chatId),
+    );
+
+    this.outputHandler = new OutputHandler(logger, sender, this.outputsManager);
+  }
 
   isBusy(chatId: string): boolean {
     return this.runningTasks.has(chatId);
+  }
+
+  private stopTask(chatId: string): void {
+    const task = this.runningTasks.get(chatId);
+    if (!task) return;
+    if (task.questionTimeoutId) clearTimeout(task.questionTimeoutId);
+    task.executionHandle.finish();
+    task.abortController.abort();
+    this.runningTasks.delete(chatId);
   }
 
   private processQueue(chatId: string): void {
@@ -85,18 +109,30 @@ export class MessageBridge {
     if (queue.length === 0) {
       this.messageQueues.delete(chatId);
     }
-    // Fire and forget — executeQuery handles its own errors
     this.executeQuery(next).catch((err) => {
       this.logger.error({ err, chatId }, 'Error processing queued message');
     });
   }
 
   async handleMessage(msg: IncomingMessage): Promise<void> {
-    const { userId, chatId, text } = msg;
+    const { chatId, text } = msg;
 
     // Handle commands (always allowed, even during pending questions)
     if (text.startsWith('/')) {
-      await this.handleCommand(msg);
+      const handled = await this.commandHandler.handle(msg);
+      if (handled) return;
+
+      // Unrecognized /xxx command — pass through to Claude
+      if (this.runningTasks.has(chatId)) {
+        await this.sender.sendTextNotice(
+          chatId,
+          '⏳ Task In Progress',
+          'You have a running task. Use `/stop` to abort it, or wait for it to finish.',
+          'orange',
+        );
+        return;
+      }
+      await this.executeQuery(msg);
       return;
     }
 
@@ -139,13 +175,11 @@ export class MessageBridge {
     const { chatId, text, imageKey } = msg;
     const pending = task.pendingQuestion!;
 
-    // Reject image replies during pending question
     if (imageKey) {
       await this.sender.sendText(chatId, '请用文字回复选择，或直接输入自定义答案。');
       return;
     }
 
-    // Parse user reply: number → option label, or free text
     const trimmed = text.trim();
     const firstQuestion = pending.questions[0];
     let answerText: string;
@@ -153,27 +187,22 @@ export class MessageBridge {
     if (firstQuestion) {
       const num = parseInt(trimmed, 10);
       if (num >= 1 && num <= firstQuestion.options.length) {
-        // User picked a numbered option
         answerText = firstQuestion.options[num - 1].label;
       } else {
-        // Free text / custom answer
         answerText = trimmed;
       }
     } else {
       answerText = trimmed;
     }
 
-    // Build answer JSON matching AskUserQuestion's expected format
     const answers: Record<string, string> = {};
     if (firstQuestion) {
-      // Use a combined key from questions
       for (const q of pending.questions) {
         answers[q.header] = answerText;
       }
     }
     const answerJson = JSON.stringify({ answers });
 
-    // Clear the pending question state
     if (task.questionTimeoutId) {
       clearTimeout(task.questionTimeoutId);
       task.questionTimeoutId = undefined;
@@ -181,97 +210,10 @@ export class MessageBridge {
     task.pendingQuestion = null;
     task.processor.clearPendingQuestion();
 
-    // Get session ID for the answer message
     const sessionId = task.processor.getSessionId() || '';
-
-    // Send the answer to Claude
     task.executionHandle.sendAnswer(pending.toolUseId, sessionId, answerJson);
 
     this.logger.info({ chatId, answer: answerText, toolUseId: pending.toolUseId }, 'Sent user answer to Claude');
-  }
-
-  private async handleCommand(msg: IncomingMessage): Promise<void> {
-    const { userId, chatId, text } = msg;
-    const [cmd] = text.split(/\s+/);
-
-    this.audit.log({ event: 'command', botName: this.config.name, chatId, userId, prompt: cmd });
-
-    switch (cmd.toLowerCase()) {
-      case '/help':
-        await this.sender.sendTextNotice(chatId, '📖 Help', [
-          '**Available Commands:**',
-          '`/reset` - Clear session, start fresh',
-          '`/stop` - Abort current running task',
-          '`/status` - Show current session info',
-          '`/memory` - Memory document commands',
-          '`/help` - Show this help message',
-          '',
-          '**Usage:**',
-          'Send any text message to start a conversation with Claude Code.',
-          'Each chat has an independent session with a fixed working directory.',
-          '',
-          '**Memory Commands:**',
-          '`/memory list` - Show folder tree',
-          '`/memory search <query>` - Search documents',
-          '`/memory status` - Server health check',
-        ].join('\n'));
-        break;
-
-      case '/reset':
-        this.sessionManager.resetSession(chatId);
-        await this.sender.sendTextNotice(chatId, '✅ Session Reset', 'Conversation cleared. Working directory preserved.', 'green');
-        break;
-
-      case '/stop': {
-        const task = this.runningTasks.get(chatId);
-        if (task) {
-          if (task.questionTimeoutId) {
-            clearTimeout(task.questionTimeoutId);
-          }
-          task.executionHandle.finish();
-          task.abortController.abort();
-          this.audit.log({ event: 'task_stopped', botName: this.config.name, chatId, userId, durationMs: Date.now() - task.startTime });
-          this.runningTasks.delete(chatId);
-          await this.sender.sendTextNotice(chatId, '🛑 Stopped', 'Current task has been aborted.', 'orange');
-        } else {
-          await this.sender.sendTextNotice(chatId, 'ℹ️ No Running Task', 'There is no task to stop.', 'blue');
-        }
-        break;
-      }
-
-      case '/status': {
-        const session = this.sessionManager.getSession(chatId);
-        const isRunning = this.runningTasks.has(chatId);
-        await this.sender.sendTextNotice(chatId, '📊 Status', [
-          `**User:** \`${userId}\``,
-          `**Working Directory:** \`${session.workingDirectory}\``,
-          `**Session:** ${session.sessionId ? `\`${session.sessionId.slice(0, 8)}...\`` : '_None_'}`,
-          `**Running:** ${isRunning ? 'Yes ⏳' : 'No'}`,
-        ].join('\n'));
-        break;
-      }
-
-      case '/memory': {
-        const args = text.slice('/memory'.length).trim();
-        await this.handleMemoryCommand(chatId, args);
-        break;
-      }
-
-      default:
-        // Unrecognized /xxx commands — pass through to Claude as regular text
-        // so that Claude Code skills (e.g. /metaskill, /metamemory) can be triggered
-        if (this.runningTasks.has(chatId)) {
-          await this.sender.sendTextNotice(
-            chatId,
-            '⏳ Task In Progress',
-            'You have a running task. Use `/stop` to abort it, or wait for it to finish.',
-            'orange',
-          );
-          return;
-        }
-        await this.executeQuery(msg);
-        return;
-    }
   }
 
   private async executeQuery(msg: IncomingMessage): Promise<void> {
@@ -329,8 +271,6 @@ export class MessageBridge {
       return;
     }
 
-    // Build apiContext for system prompt injection (botName + chatId only;
-    // port and secret are already in METABOT_* env vars set by config.ts)
     const apiContext = { botName: this.config.name, chatId };
 
     // Start multi-turn execution
@@ -358,6 +298,7 @@ export class MessageBridge {
       chatId,
     };
     this.runningTasks.set(chatId, runningTask);
+    metrics.setGauge('metabot_active_tasks', this.runningTasks.size);
 
     this.audit.log({ event: 'task_start', botName: this.config.name, chatId, userId, prompt: text });
 
@@ -404,11 +345,9 @@ export class MessageBridge {
         if (state.status === 'waiting_for_input' && state.pendingQuestion) {
           runningTask.pendingQuestion = state.pendingQuestion;
 
-          // Immediately update card to show the question
           await rateLimiter.flush();
           await this.sender.updateCard(messageId, state);
 
-          // Set question timeout
           runningTask.questionTimeoutId = setTimeout(() => {
             this.logger.warn({ chatId }, 'Question timeout, auto-answering');
             const pending = runningTask.pendingQuestion;
@@ -421,8 +360,6 @@ export class MessageBridge {
             }
           }, QUESTION_TIMEOUT_MS);
 
-          // The for-await loop will naturally block on stream.next()
-          // until Claude produces new messages after receiving the answer
           continue;
         }
 
@@ -432,7 +369,7 @@ export class MessageBridge {
           runningTask.questionTimeoutId = undefined;
         }
 
-        // Break on final states — the multi-turn stream won't close on its own
+        // Break on final states
         if (state.status === 'complete' || state.status === 'error') {
           break;
         }
@@ -443,39 +380,17 @@ export class MessageBridge {
         });
       }
 
-      // Cancel any pending rate-limited update and wait for the rate-limit interval
-      // to elapse since the last sent update. This avoids two problems:
-      // 1. flush() would send a stale 'running' card right before 'complete', triggering rate limits
-      // 2. cancel() alone would skip the wait, causing the final card to be rate-limited too
       await rateLimiter.cancelAndWait();
 
-      // If the stream ended without producing a terminal state (no 'result' message),
-      // force the card into a terminal state. This happens when:
-      // - The execution was aborted (timeout, /stop)
-      // - The SDK process crashed or disconnected
-      // - AbortError was swallowed in wrapStream
+      // Force terminal state if stream ended without one
       if (lastState.status !== 'complete' && lastState.status !== 'error') {
         if (timedOut) {
-          lastState = {
-            ...lastState,
-            status: 'error',
-            errorMessage: 'Task timed out (1 hour limit)',
-          };
+          lastState = { ...lastState, status: 'error', errorMessage: 'Task timed out (1 hour limit)' };
         } else if (idledOut) {
-          lastState = {
-            ...lastState,
-            status: 'error',
-            errorMessage: 'Task aborted: no activity for 5 minutes',
-          };
+          lastState = { ...lastState, status: 'error', errorMessage: 'Task aborted: no activity for 5 minutes' };
         } else if (abortController.signal.aborted) {
-          lastState = {
-            ...lastState,
-            status: 'error',
-            errorMessage: 'Task was stopped',
-          };
+          lastState = { ...lastState, status: 'error', errorMessage: 'Task was stopped' };
         } else {
-          // Stream ended normally without result — treat as complete
-          // This can happen if maxTurns is reached or SDK exits cleanly without result
           this.logger.warn({ chatId }, 'Stream ended without result message, forcing complete state');
           lastState = {
             ...lastState,
@@ -485,10 +400,10 @@ export class MessageBridge {
         }
       }
 
-      // Send final card with retry — this is the most important update
       await this.sendFinalCard(messageId, lastState, chatId);
 
-      // Audit log task completion
+      // Audit + cost tracking
+      const durationMs = Date.now() - startTime;
       const auditEvent = timedOut ? 'task_timeout' as const
         : idledOut ? 'task_idle_timeout' as const
         : lastState.status === 'error' ? 'task_error' as const
@@ -496,20 +411,27 @@ export class MessageBridge {
       this.audit.log({
         event: auditEvent,
         botName: this.config.name, chatId, userId, prompt: text,
-        durationMs: Date.now() - startTime,
-        costUsd: lastState.costUsd,
-        error: lastState.errorMessage,
+        durationMs, costUsd: lastState.costUsd, error: lastState.errorMessage,
       });
+      this.costTracker.record({ botName: this.config.name, userId, success: lastState.status === 'complete', costUsd: lastState.costUsd, durationMs });
+      metrics.incCounter('metabot_tasks_total');
+      metrics.incCounter('metabot_tasks_by_status', lastState.status === 'complete' ? 'success' : 'error');
+      metrics.observeHistogram('metabot_task_duration_seconds', durationMs / 1000);
+      if (lastState.costUsd) metrics.observeHistogram('metabot_task_cost_usd', lastState.costUsd);
 
       // Send any output files produced by Claude
-      await this.sendOutputFiles(chatId, outputsDir, processor, lastState);
+      await this.outputHandler.sendOutputFiles(chatId, outputsDir, processor, lastState);
     } catch (err: any) {
       this.logger.error({ err, chatId, userId }, 'Claude execution error');
 
+      const durationMs = Date.now() - startTime;
       this.audit.log({
         event: 'task_error', botName: this.config.name, chatId, userId, prompt: text,
-        durationMs: Date.now() - startTime, error: err.message || 'Unknown error',
+        durationMs, error: err.message || 'Unknown error',
       });
+      this.costTracker.record({ botName: this.config.name, userId, success: false, durationMs });
+      metrics.incCounter('metabot_tasks_total');
+      metrics.incCounter('metabot_tasks_by_status', 'error');
 
       const errorState: CardState = {
         status: 'error',
@@ -528,16 +450,14 @@ export class MessageBridge {
       }
       try { executionHandle.finish(); } catch (e) { this.logger.warn({ err: e, chatId }, 'Error finishing execution handle'); }
       this.runningTasks.delete(chatId);
-      // Process queued messages for this chat
+      metrics.setGauge('metabot_active_tasks', this.runningTasks.size);
       this.processQueue(chatId);
-      // Cleanup temp downloaded files
       if (imagePath) {
         try { fs.unlinkSync(imagePath); } catch { /* ignore */ }
       }
       if (filePath) {
         try { fs.unlinkSync(filePath); } catch { /* ignore */ }
       }
-      // Safety net: clean up outputs directory
       try { this.outputsManager.cleanup(outputsDir); } catch { /* ignore */ }
     }
   }
@@ -553,14 +473,12 @@ export class MessageBridge {
     const cwd = session.workingDirectory;
     const abortController = new AbortController();
 
-    // Prepare per-chat outputs directory
     const outputsDir = this.outputsManager.prepareDir(chatId);
 
     const displayPrompt = prompt;
     const processor = new StreamProcessor(displayPrompt);
     const rateLimiter = new RateLimiter(1500);
 
-    // Optionally send a streaming card
     let messageId: string | undefined;
     if (sendCards) {
       const initialState: CardState = {
@@ -572,11 +490,8 @@ export class MessageBridge {
       messageId = await this.sender.sendCard(chatId, initialState);
     }
 
-    // Build apiContext for system prompt injection (botName + chatId only;
-    // port and secret are already in METABOT_* env vars set by config.ts)
     const apiContext = { botName: this.config.name, chatId };
 
-    // Start execution
     const executionHandle = this.executor.startExecution({
       prompt,
       cwd,
@@ -598,6 +513,7 @@ export class MessageBridge {
       chatId,
     };
     this.runningTasks.set(chatId, runningTask);
+    metrics.setGauge('metabot_active_tasks', this.runningTasks.size);
 
     this.audit.log({ event: 'api_task_start', botName: this.config.name, chatId, userId, prompt });
 
@@ -610,7 +526,6 @@ export class MessageBridge {
       abortController.abort();
     }, TASK_TIMEOUT_MS);
 
-    // Idle detection
     let idleTimerId: ReturnType<typeof setTimeout> | undefined;
     const resetIdleTimer = () => {
       if (idleTimerId) clearTimeout(idleTimerId);
@@ -638,13 +553,11 @@ export class MessageBridge {
         const state = processor.processMessage(message);
         lastState = state;
 
-        // Update session ID if discovered
         const newSessionId = processor.getSessionId();
         if (newSessionId && newSessionId !== session.sessionId) {
           this.sessionManager.setSessionId(chatId, newSessionId);
         }
 
-        // Auto-answer any AskUserQuestion prompts (no interactive user for API tasks)
         if (state.status === 'waiting_for_input' && state.pendingQuestion) {
           const pending = state.pendingQuestion;
           processor.clearPendingQuestion();
@@ -658,7 +571,6 @@ export class MessageBridge {
           break;
         }
 
-        // Throttled card update if sendCards is enabled
         if (sendCards && messageId) {
           rateLimiter.schedule(() => {
             this.sender.updateCard(messageId!, state);
@@ -666,10 +578,8 @@ export class MessageBridge {
         }
       }
 
-      // Cancel pending rate-limited update (we'll send the final state directly)
       await rateLimiter.cancelAndWait();
 
-      // Force terminal state if stream ended without one
       if (lastState.status !== 'complete' && lastState.status !== 'error') {
         if (timedOut) {
           lastState = { ...lastState, status: 'error', errorMessage: 'Task timed out (1 hour limit)' };
@@ -686,19 +596,21 @@ export class MessageBridge {
         }
       }
 
-      // Send final card update with retry
       if (sendCards && messageId) {
         await this.sendFinalCard(messageId, lastState, chatId);
       }
 
-      // Send any output files
-      await this.sendOutputFiles(chatId, outputsDir, processor, lastState);
+      await this.outputHandler.sendOutputFiles(chatId, outputsDir, processor, lastState);
 
+      const durationMs = Date.now() - startTime;
       this.audit.log({
         event: 'api_task_complete', botName: this.config.name, chatId, userId, prompt,
-        durationMs: Date.now() - startTime, costUsd: lastState.costUsd,
-        error: lastState.errorMessage,
+        durationMs, costUsd: lastState.costUsd, error: lastState.errorMessage,
       });
+      this.costTracker.record({ botName: this.config.name, userId, success: lastState.status === 'complete', costUsd: lastState.costUsd, durationMs });
+      metrics.incCounter('metabot_api_tasks_total');
+      metrics.observeHistogram('metabot_task_duration_seconds', durationMs / 1000);
+      if (lastState.costUsd) metrics.observeHistogram('metabot_task_cost_usd', lastState.costUsd);
 
       return {
         success: lastState.status === 'complete',
@@ -733,64 +645,14 @@ export class MessageBridge {
       if (idleTimerId) clearTimeout(idleTimerId);
       try { executionHandle.finish(); } catch (e) { this.logger.warn({ err: e, chatId }, 'Error finishing execution handle'); }
       this.runningTasks.delete(chatId);
+      metrics.setGauge('metabot_active_tasks', this.runningTasks.size);
       this.processQueue(chatId);
       try { this.outputsManager.cleanup(outputsDir); } catch { /* ignore */ }
     }
   }
 
-  private async handleMemoryCommand(chatId: string, args: string): Promise<void> {
-    const [subCmd, ...rest] = args.split(/\s+/);
-
-    if (!subCmd) {
-      await this.sender.sendTextNotice(
-        chatId,
-        '📝 Memory',
-        'Usage:\n- `/memory list` — Show folder tree\n- `/memory search <query>` — Search documents\n- `/memory status` — Health check',
-      );
-      return;
-    }
-
-    try {
-      switch (subCmd.toLowerCase()) {
-        case 'list': {
-          const tree = await this.memoryClient.listFolderTree();
-          const formatted = this.memoryClient.formatFolderTree(tree);
-          await this.sender.sendTextNotice(chatId, '📂 Memory Folders', formatted);
-          break;
-        }
-        case 'search': {
-          const query = rest.join(' ').trim();
-          if (!query) {
-            await this.sender.sendTextNotice(chatId, '📝 Memory', 'Usage: `/memory search <query>`');
-            return;
-          }
-          const results = await this.memoryClient.search(query);
-          const formatted = this.memoryClient.formatSearchResults(results);
-          await this.sender.sendTextNotice(chatId, `🔍 Search: ${query}`, formatted);
-          break;
-        }
-        case 'status': {
-          const health = await this.memoryClient.health();
-          await this.sender.sendTextNotice(
-            chatId,
-            '📝 Memory Status',
-            `Status: ${health.status}\nDocuments: ${health.document_count}\nFolders: ${health.folder_count}`,
-            'green',
-          );
-          break;
-        }
-        default:
-          await this.sender.sendTextNotice(chatId, '📝 Memory', `Unknown sub-command: \`${subCmd}\`\nUse \`/memory\` for help.`, 'orange');
-      }
-    } catch (err: any) {
-      this.logger.error({ err, chatId }, 'Memory command error');
-      await this.sender.sendTextNotice(chatId, '❌ Memory Error', `Failed to connect to memory server: ${err.message}`, 'red');
-    }
-  }
-
   /**
    * Send the final card update with exponential backoff retry.
-   * This is the most important update — it changes the card from running → complete/error.
    * Retries with exponential backoff (2s → 4s → 8s). If all retries fail,
    * sends a plain text fallback so the user at least sees the result.
    */
@@ -799,18 +661,16 @@ export class MessageBridge {
       try {
         await this.sender.updateCard(messageId, state);
         if (attempt > 0) {
-          // Verify the update stuck by waiting and sending again
           await new Promise((r) => setTimeout(r, FINAL_CARD_BASE_DELAY_MS));
           await this.sender.updateCard(messageId, state);
         }
-        return; // Success
+        return;
       } catch {
         const delay = FINAL_CARD_BASE_DELAY_MS * Math.pow(2, attempt);
         this.logger.warn({ attempt, delay, messageId }, 'Final card update failed, retrying');
         await new Promise((r) => setTimeout(r, delay));
       }
     }
-    // All retries exhausted — send plain text fallback
     if (chatId) {
       this.logger.error({ messageId, chatId }, 'All final card retries failed, sending text fallback');
       const statusEmoji = state.status === 'complete' ? '✅' : '❌';
@@ -823,65 +683,7 @@ export class MessageBridge {
     }
   }
 
-  private async sendOutputFiles(
-    chatId: string,
-    outputsDir: string,
-    processor: StreamProcessor,
-    state: CardState,
-  ): Promise<void> {
-    const sentPaths = new Set<string>();
-
-    // 1. Scan the outputs directory for any files Claude placed there
-    const outputFiles = this.outputsManager.scanOutputs(outputsDir);
-    for (const file of outputFiles) {
-      try {
-        if (file.isImage && file.sizeBytes < 10 * 1024 * 1024) {
-          this.logger.info({ filePath: file.filePath }, 'Sending output image from outputs dir');
-          await this.sender.sendImageFile(chatId, file.filePath);
-        } else if (!file.isImage && file.sizeBytes < 30 * 1024 * 1024) {
-          // Try file upload first; fall back to sending text content for small text files
-          this.logger.info({ filePath: file.filePath }, 'Sending output file from outputs dir');
-          const sent = await this.sender.sendLocalFile(chatId, file.filePath, file.fileName);
-          if (!sent && OutputsManager.isTextFile(file.extension) && file.sizeBytes < 30 * 1024) {
-            this.logger.info({ filePath: file.filePath }, 'File upload failed, sending as text message');
-            const content = fs.readFileSync(file.filePath, 'utf-8');
-            await this.sender.sendText(chatId, `📄 ${file.fileName}\n\n${content}`);
-          }
-        } else {
-          this.logger.warn({ filePath: file.filePath, sizeBytes: file.sizeBytes }, 'Output file too large to send');
-        }
-        sentPaths.add(file.filePath);
-      } catch (err) {
-        this.logger.warn({ err, filePath: file.filePath }, 'Failed to send output file');
-      }
-    }
-
-    // 2. Fallback: send images detected via old method (Write tool tracking + response text scanning)
-    const imagePaths = new Set<string>(processor.getImagePaths());
-    if (state.responseText) {
-      for (const p of extractImagePaths(state.responseText)) {
-        imagePaths.add(p);
-      }
-    }
-
-    for (const imgPath of imagePaths) {
-      if (sentPaths.has(imgPath)) continue; // Already sent from outputs dir
-      try {
-        if (fs.existsSync(imgPath) && fs.statSync(imgPath).isFile()) {
-          const size = fs.statSync(imgPath).size;
-          if (size > 0 && size < 10 * 1024 * 1024) {
-            this.logger.info({ imgPath }, 'Sending output image (fallback)');
-            await this.sender.sendImageFile(chatId, imgPath);
-          }
-        }
-      } catch (err) {
-        this.logger.warn({ err, imgPath }, 'Failed to send output image');
-      }
-    }
-  }
-
   destroy(): void {
-    // Abort all running tasks
     for (const [chatId, task] of this.runningTasks) {
       if (task.questionTimeoutId) {
         clearTimeout(task.questionTimeoutId);
@@ -891,7 +693,6 @@ export class MessageBridge {
       this.logger.info({ chatId }, 'Aborted running task during shutdown');
     }
     this.runningTasks.clear();
-
     this.sessionManager.destroy();
   }
 }
