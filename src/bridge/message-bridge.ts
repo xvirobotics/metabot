@@ -10,10 +10,14 @@ import { SessionManager } from '../claude/session-manager.js';
 import { RateLimiter } from './rate-limiter.js';
 import { OutputsManager } from './outputs-manager.js';
 import { MemoryClient } from '../memory/memory-client.js';
+import { AuditLogger } from '../utils/audit-logger.js';
 
 const TASK_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
 const QUESTION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes for user to answer
 const MAX_QUEUE_SIZE = 5; // max queued messages per chat
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes idle → abort
+const FINAL_CARD_RETRIES = 3;
+const FINAL_CARD_BASE_DELAY_MS = 2000;
 
 interface RunningTask {
   abortController: AbortController;
@@ -48,6 +52,7 @@ export class MessageBridge {
   private sessionManager: SessionManager;
   private outputsManager: OutputsManager;
   private memoryClient: MemoryClient;
+  private audit: AuditLogger;
   private runningTasks = new Map<string, RunningTask>(); // keyed by chatId
   private messageQueues = new Map<string, IncomingMessage[]>(); // per-chatId message queue
 
@@ -62,6 +67,7 @@ export class MessageBridge {
     this.sessionManager = new SessionManager(config.claude.defaultWorkingDirectory, logger, config.name);
     this.outputsManager = new OutputsManager(config.claude.outputsBaseDir, logger);
     this.memoryClient = new MemoryClient(memoryServerUrl, logger, memorySecret);
+    this.audit = new AuditLogger(logger);
   }
 
 
@@ -115,6 +121,7 @@ export class MessageBridge {
       }
       queue.push(msg);
       this.messageQueues.set(chatId, queue);
+      this.audit.log({ event: 'task_queued', botName: this.config.name, chatId, userId: msg.userId, prompt: text, meta: { position: queue.length } });
       await this.sender.sendTextNotice(
         chatId,
         '📋 Queued',
@@ -187,6 +194,8 @@ export class MessageBridge {
     const { userId, chatId, text } = msg;
     const [cmd] = text.split(/\s+/);
 
+    this.audit.log({ event: 'command', botName: this.config.name, chatId, userId, prompt: cmd });
+
     switch (cmd.toLowerCase()) {
       case '/help':
         await this.sender.sendTextNotice(chatId, '📖 Help', [
@@ -221,6 +230,7 @@ export class MessageBridge {
           }
           task.executionHandle.finish();
           task.abortController.abort();
+          this.audit.log({ event: 'task_stopped', botName: this.config.name, chatId, userId, durationMs: Date.now() - task.startTime });
           this.runningTasks.delete(chatId);
           await this.sender.sendTextNotice(chatId, '🛑 Stopped', 'Current task has been aborted.', 'orange');
         } else {
@@ -336,9 +346,10 @@ export class MessageBridge {
     const rateLimiter = new RateLimiter(1500);
 
     // Register running task
+    const startTime = Date.now();
     const runningTask: RunningTask = {
       abortController,
-      startTime: Date.now(),
+      startTime,
       executionHandle,
       pendingQuestion: null,
       cardMessageId: messageId,
@@ -348,8 +359,11 @@ export class MessageBridge {
     };
     this.runningTasks.set(chatId, runningTask);
 
+    this.audit.log({ event: 'task_start', botName: this.config.name, chatId, userId, prompt: text });
+
     // Setup timeout
     let timedOut = false;
+    let idledOut = false;
     const timeoutId = setTimeout(() => {
       this.logger.warn({ chatId, userId }, 'Task timeout, aborting');
       timedOut = true;
@@ -357,11 +371,25 @@ export class MessageBridge {
       abortController.abort();
     }, TASK_TIMEOUT_MS);
 
+    // Idle detection: reset timer on every stream message
+    let idleTimerId: ReturnType<typeof setTimeout> | undefined;
+    const resetIdleTimer = () => {
+      if (idleTimerId) clearTimeout(idleTimerId);
+      idleTimerId = setTimeout(() => {
+        this.logger.warn({ chatId, userId }, 'Task idle timeout (5min no stream), aborting');
+        idledOut = true;
+        executionHandle.finish();
+        abortController.abort();
+      }, IDLE_TIMEOUT_MS);
+    };
+    resetIdleTimer();
+
     let lastState: CardState = initialState;
 
     try {
       for await (const message of executionHandle.stream) {
         if (abortController.signal.aborted) break;
+        resetIdleTimer();
 
         const state = processor.processMessage(message);
         lastState = state;
@@ -433,6 +461,12 @@ export class MessageBridge {
             status: 'error',
             errorMessage: 'Task timed out (1 hour limit)',
           };
+        } else if (idledOut) {
+          lastState = {
+            ...lastState,
+            status: 'error',
+            errorMessage: 'Task aborted: no activity for 5 minutes',
+          };
         } else if (abortController.signal.aborted) {
           lastState = {
             ...lastState,
@@ -452,12 +486,30 @@ export class MessageBridge {
       }
 
       // Send final card with retry — this is the most important update
-      await this.sendFinalCard(messageId, lastState);
+      await this.sendFinalCard(messageId, lastState, chatId);
+
+      // Audit log task completion
+      const auditEvent = timedOut ? 'task_timeout' as const
+        : idledOut ? 'task_idle_timeout' as const
+        : lastState.status === 'error' ? 'task_error' as const
+        : 'task_complete' as const;
+      this.audit.log({
+        event: auditEvent,
+        botName: this.config.name, chatId, userId, prompt: text,
+        durationMs: Date.now() - startTime,
+        costUsd: lastState.costUsd,
+        error: lastState.errorMessage,
+      });
 
       // Send any output files produced by Claude
       await this.sendOutputFiles(chatId, outputsDir, processor, lastState);
     } catch (err: any) {
       this.logger.error({ err, chatId, userId }, 'Claude execution error');
+
+      this.audit.log({
+        event: 'task_error', botName: this.config.name, chatId, userId, prompt: text,
+        durationMs: Date.now() - startTime, error: err.message || 'Unknown error',
+      });
 
       const errorState: CardState = {
         status: 'error',
@@ -467,9 +519,10 @@ export class MessageBridge {
         errorMessage: err.message || 'Unknown error',
       };
       await rateLimiter.cancelAndWait();
-      await this.sendFinalCard(messageId, errorState);
+      await this.sendFinalCard(messageId, errorState, chatId);
     } finally {
       clearTimeout(timeoutId);
+      if (idleTimerId) clearTimeout(idleTimerId);
       if (runningTask.questionTimeoutId) {
         clearTimeout(runningTask.questionTimeoutId);
       }
@@ -533,9 +586,10 @@ export class MessageBridge {
       apiContext,
     });
 
+    const startTime = Date.now();
     const runningTask: RunningTask = {
       abortController,
-      startTime: Date.now(),
+      startTime,
       executionHandle,
       pendingQuestion: null,
       cardMessageId: messageId || '',
@@ -545,13 +599,29 @@ export class MessageBridge {
     };
     this.runningTasks.set(chatId, runningTask);
 
+    this.audit.log({ event: 'api_task_start', botName: this.config.name, chatId, userId, prompt });
+
     let timedOut = false;
+    let idledOut = false;
     const timeoutId = setTimeout(() => {
       this.logger.warn({ chatId, userId }, 'API task timeout, aborting');
       timedOut = true;
       executionHandle.finish();
       abortController.abort();
     }, TASK_TIMEOUT_MS);
+
+    // Idle detection
+    let idleTimerId: ReturnType<typeof setTimeout> | undefined;
+    const resetIdleTimer = () => {
+      if (idleTimerId) clearTimeout(idleTimerId);
+      idleTimerId = setTimeout(() => {
+        this.logger.warn({ chatId, userId }, 'API task idle timeout (5min no stream), aborting');
+        idledOut = true;
+        executionHandle.finish();
+        abortController.abort();
+      }, IDLE_TIMEOUT_MS);
+    };
+    resetIdleTimer();
 
     let lastState: CardState = {
       status: 'thinking',
@@ -563,6 +633,7 @@ export class MessageBridge {
     try {
       for await (const message of executionHandle.stream) {
         if (abortController.signal.aborted) break;
+        resetIdleTimer();
 
         const state = processor.processMessage(message);
         lastState = state;
@@ -602,6 +673,8 @@ export class MessageBridge {
       if (lastState.status !== 'complete' && lastState.status !== 'error') {
         if (timedOut) {
           lastState = { ...lastState, status: 'error', errorMessage: 'Task timed out (1 hour limit)' };
+        } else if (idledOut) {
+          lastState = { ...lastState, status: 'error', errorMessage: 'Task aborted: no activity for 5 minutes' };
         } else if (abortController.signal.aborted) {
           lastState = { ...lastState, status: 'error', errorMessage: 'Task was stopped' };
         } else {
@@ -615,11 +688,17 @@ export class MessageBridge {
 
       // Send final card update with retry
       if (sendCards && messageId) {
-        await this.sendFinalCard(messageId, lastState);
+        await this.sendFinalCard(messageId, lastState, chatId);
       }
 
       // Send any output files
       await this.sendOutputFiles(chatId, outputsDir, processor, lastState);
+
+      this.audit.log({
+        event: 'api_task_complete', botName: this.config.name, chatId, userId, prompt,
+        durationMs: Date.now() - startTime, costUsd: lastState.costUsd,
+        error: lastState.errorMessage,
+      });
 
       return {
         success: lastState.status === 'complete',
@@ -641,7 +720,7 @@ export class MessageBridge {
           errorMessage: err.message || 'Unknown error',
         };
         await rateLimiter.cancelAndWait();
-        await this.sendFinalCard(messageId, errorState);
+        await this.sendFinalCard(messageId, errorState, chatId);
       }
 
       return {
@@ -651,6 +730,7 @@ export class MessageBridge {
       };
     } finally {
       clearTimeout(timeoutId);
+      if (idleTimerId) clearTimeout(idleTimerId);
       try { executionHandle.finish(); } catch (e) { this.logger.warn({ err: e, chatId }, 'Error finishing execution handle'); }
       this.runningTasks.delete(chatId);
       this.processQueue(chatId);
@@ -709,18 +789,38 @@ export class MessageBridge {
   }
 
   /**
-   * Send the final card update with a retry.
+   * Send the final card update with exponential backoff retry.
    * This is the most important update — it changes the card from running → complete/error.
-   * We send it twice with a delay to handle Feishu rate-limiting or transient failures,
-   * since updateCard() swallows errors internally.
+   * Retries with exponential backoff (2s → 4s → 8s). If all retries fail,
+   * sends a plain text fallback so the user at least sees the result.
    */
-  private async sendFinalCard(messageId: string, state: CardState): Promise<void> {
-    // First attempt
-    await this.sender.updateCard(messageId, state);
-    // Second attempt after delay — ensures the terminal state is displayed
-    // even if the first attempt was rate-limited or silently dropped
-    await new Promise((r) => setTimeout(r, 2000));
-    await this.sender.updateCard(messageId, state);
+  private async sendFinalCard(messageId: string, state: CardState, chatId?: string): Promise<void> {
+    for (let attempt = 0; attempt < FINAL_CARD_RETRIES; attempt++) {
+      try {
+        await this.sender.updateCard(messageId, state);
+        if (attempt > 0) {
+          // Verify the update stuck by waiting and sending again
+          await new Promise((r) => setTimeout(r, FINAL_CARD_BASE_DELAY_MS));
+          await this.sender.updateCard(messageId, state);
+        }
+        return; // Success
+      } catch {
+        const delay = FINAL_CARD_BASE_DELAY_MS * Math.pow(2, attempt);
+        this.logger.warn({ attempt, delay, messageId }, 'Final card update failed, retrying');
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+    // All retries exhausted — send plain text fallback
+    if (chatId) {
+      this.logger.error({ messageId, chatId }, 'All final card retries failed, sending text fallback');
+      const statusEmoji = state.status === 'complete' ? '✅' : '❌';
+      const summary = state.responseText
+        ? state.responseText.slice(0, 2000)
+        : state.errorMessage || 'Task finished';
+      try {
+        await this.sender.sendText(chatId, `${statusEmoji} ${summary}`);
+      } catch { /* last resort failed */ }
+    }
   }
 
   private async sendOutputFiles(
