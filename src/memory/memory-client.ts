@@ -11,6 +11,7 @@ export interface FolderTreeNode {
 export interface DocumentSummary {
   id: string;
   title: string;
+  folder_id: string;
   path: string;
   tags: string[];
   created_by: string;

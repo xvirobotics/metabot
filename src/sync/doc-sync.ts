@@ -320,13 +320,21 @@ export class DocSync {
     node: FolderTreeNode,
     result: SyncResult,
   ): Promise<void> {
-    // Get documents in this folder
-    const folderId = node.id === 'root' || node.path === '/' ? undefined : node.id;
+    const isRoot = node.id === 'root' || node.path === '/';
+    // For root: listDocuments(undefined) returns ALL docs globally.
+    // Filter to only root-folder docs to avoid double-traversal with child folders.
+    const folderId = isRoot ? undefined : node.id;
     try {
       const docs = await this.memoryClient.listDocuments(folderId, 200);
       const parentNodeToken = this.resolveFolderNodeToken(node.id);
 
       for (const docSummary of docs) {
+        // When listing from root, skip docs that belong to subfolders
+        // (they'll be synced when we recurse into that folder)
+        if (isRoot && docSummary.folder_id && docSummary.folder_id !== 'root') {
+          continue;
+        }
+
         try {
           const doc = await this.fetchDocument(docSummary.id);
           if (!doc) {

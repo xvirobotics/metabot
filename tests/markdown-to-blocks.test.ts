@@ -56,6 +56,19 @@ describe('parseInlineMarkdown', () => {
     });
   });
 
+  it('URL-encodes link URLs with special characters', () => {
+    const result = parseInlineMarkdown('[doc](https://example.com/中文文档)');
+    expect(result).toHaveLength(1);
+    expect(result[0].text_run?.text_element_style?.link?.url).toBe('https://example.com/%E4%B8%AD%E6%96%87%E6%96%87%E6%A1%A3');
+  });
+
+  it('strips relative links and keeps text only', () => {
+    const result = parseInlineMarkdown('[doc](/some/path)');
+    expect(result).toHaveLength(1);
+    expect(result[0].text_run?.content).toBe('doc');
+    expect(result[0].text_run?.text_element_style?.link).toBeUndefined();
+  });
+
   it('handles empty string', () => {
     const result = parseInlineMarkdown('');
     expect(result).toHaveLength(1);
@@ -115,11 +128,11 @@ describe('markdownToBlocks', () => {
     }
   });
 
-  it('converts blockquotes', () => {
+  it('converts blockquotes as text blocks', () => {
     const blocks = markdownToBlocks('> This is a quote\n> with two lines');
     expect(blocks).toHaveLength(1);
-    expect(blocks[0].block_type).toBe(15); // QUOTE
-    expect(blocks[0].quote.elements[0].text_run.content).toContain('This is a quote');
+    expect(blocks[0].block_type).toBe(2); // TEXT (rendered as plain text since Feishu API doesn't support bare quote blocks)
+    expect(blocks[0].text.elements[0].text_run.content).toContain('This is a quote');
   });
 
   it('converts horizontal rules', () => {

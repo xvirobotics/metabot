@@ -89,13 +89,19 @@ export function parseInlineMarkdown(text: string): TextElement[] {
         },
       });
     } else if (match[2]) {
-      // Link: [text](url)
-      elements.push({
-        text_run: {
-          content: match[3],
-          text_element_style: { link: { url: match[4] } },
-        },
-      });
+      // Link: [text](url) — Feishu requires full absolute URLs (http/https)
+      const rawUrl = match[4];
+      if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+        elements.push({
+          text_run: {
+            content: match[3],
+            text_element_style: { link: { url: encodeURI(rawUrl) } },
+          },
+        });
+      } else {
+        // Relative/internal links: render as plain text (Feishu rejects non-http URLs)
+        elements.push({ text_run: { content: match[3] } });
+      }
     } else if (match[5]) {
       // Bold+italic: ***text***
       elements.push({
@@ -266,7 +272,7 @@ export function markdownToBlocks(markdown: string): FeishuBlock[] {
       continue;
     }
 
-    // --- Blockquote ---
+    // --- Blockquote (rendered as plain text since Feishu API doesn't support bare quote blocks) ---
     if (line.startsWith('>')) {
       const quoteLines: string[] = [];
       while (i < lines.length && lines[i].startsWith('>')) {
@@ -275,8 +281,8 @@ export function markdownToBlocks(markdown: string): FeishuBlock[] {
       }
       const quoteText = quoteLines.join('\n').trim();
       blocks.push({
-        block_type: BLOCK_TYPE.QUOTE,
-        quote: { elements: parseInlineMarkdown(quoteText) },
+        block_type: BLOCK_TYPE.TEXT,
+        text: { elements: parseInlineMarkdown(quoteText) },
       });
       continue;
     }
@@ -318,68 +324,6 @@ export function markdownToBlocks(markdown: string): FeishuBlock[] {
   }
 
   return blocks;
-}
-
-/** Parse a Markdown table into a Feishu table block. */
-function parseTable(tableLines: string[]): FeishuBlock | null {
-  if (tableLines.length < 2) return null;
-
-  const parseRow = (line: string): string[] => {
-    return line
-      .replace(/^\|/, '')
-      .replace(/\|$/, '')
-      .split('|')
-      .map((cell) => cell.trim());
-  };
-
-  const headerCells = parseRow(tableLines[0]);
-  const columnCount = headerCells.length;
-
-  // Skip separator line (---|----|---)
-  const dataStartIndex = tableLines[1].includes('-') ? 2 : 1;
-  const dataRows: string[][] = [];
-
-  for (let r = dataStartIndex; r < tableLines.length; r++) {
-    const cells = parseRow(tableLines[r]);
-    // Pad or trim to match column count
-    while (cells.length < columnCount) cells.push('');
-    dataRows.push(cells.slice(0, columnCount));
-  }
-
-  const allRows = [headerCells, ...dataRows];
-  const rowCount = allRows.length;
-
-  // Build table cells as children
-  const cells: FeishuBlock[] = [];
-  for (const row of allRows) {
-    for (const cell of row) {
-      cells.push({
-        block_type: BLOCK_TYPE.TABLE_CELL,
-        table_cell: {
-          body: {
-            blocks: [
-              {
-                block_type: BLOCK_TYPE.TEXT,
-                text: { elements: parseInlineMarkdown(cell) },
-              },
-            ],
-          },
-        },
-      });
-    }
-  }
-
-  return {
-    block_type: BLOCK_TYPE.TABLE,
-    table: {
-      cells,
-      property: {
-        row_size: rowCount,
-        column_size: columnCount,
-        header_row: true,
-      },
-    },
-  };
 }
 
 /**
