@@ -103,29 +103,6 @@ Prerequisites: Node.js 20+, [Claude Code CLI](https://github.com/anthropics/clau
 - **Self-growing organization** — a manager bot that creates new agents on demand, assigns tasks, schedules follow-ups
 - **Autonomous research pipeline** — agents that search, analyze, save findings to MetaMemory, and schedule next steps
 
-## Agent Communication
-
-Agents talk to each other through the HTTP API. Claude uses `curl` autonomously:
-
-```bash
-# Delegate a task to another bot
-curl -X POST localhost:9100/api/tasks \
-  -H "Authorization: Bearer $SECRET" \
-  -d '{"botName":"backend-bot","chatId":"oc_xxx","prompt":"run the migration"}'
-
-# Schedule a follow-up in 1 hour
-curl -X POST localhost:9100/api/schedule \
-  -d '{"botName":"backend-bot","chatId":"oc_xxx","prompt":"verify migration","delaySeconds":3600}'
-
-# Schedule a recurring daily task (weekdays 8am)
-curl -X POST localhost:9100/api/schedule \
-  -d '{"botName":"news-bot","chatId":"oc_xxx","prompt":"read and summarize tech news","cronExpr":"0 8 * * 1-5"}'
-
-# Create a new bot at runtime
-curl -X POST localhost:9100/api/bots \
-  -d '{"platform":"telegram","name":"data-bot","telegramBotToken":"...","defaultWorkingDirectory":"/data"}'
-```
-
 ## Configuration
 
 **`bots.json`** — define your bots:
