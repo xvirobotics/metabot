@@ -103,29 +103,6 @@ npm run dev
 - **自生长的组织** — 管理者 Bot 按需创建新 Agent，分配任务，安排后续跟进
 - **自主研究流水线** — Agent 搜索、分析、将发现存入 MetaMemory、安排下一步
 
-## Agent 间通信
-
-Agent 通过 HTTP API 互相通信。Claude 自主使用 `curl`：
-
-```bash
-# 委派任务给另一个 Bot
-curl -X POST localhost:9100/api/tasks \
-  -H "Authorization: Bearer $SECRET" \
-  -d '{"botName":"backend-bot","chatId":"oc_xxx","prompt":"跑一下迁移脚本"}'
-
-# 安排 1 小时后的跟进
-curl -X POST localhost:9100/api/schedule \
-  -d '{"botName":"backend-bot","chatId":"oc_xxx","prompt":"检查迁移结果","delaySeconds":3600}'
-
-# 创建周期性定时任务（工作日早8点）
-curl -X POST localhost:9100/api/schedule \
-  -d '{"botName":"news-bot","chatId":"oc_xxx","prompt":"阅读并总结科技新闻","cronExpr":"0 8 * * 1-5"}'
-
-# 运行时创建新 Bot
-curl -X POST localhost:9100/api/bots \
-  -d '{"platform":"telegram","name":"data-bot","telegramBotToken":"...","defaultWorkingDirectory":"/data"}'
-```
-
 ## 配置
 
 **`bots.json`** — 定义你的 Bot：
