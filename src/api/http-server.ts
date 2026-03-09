@@ -379,6 +379,7 @@ export function startApiServer(options: ApiServerOptions): http.Server {
           }
           entry = {
             name,
+            ...(body.description ? { description: body.description } : {}),
             feishuAppId: appId,
             feishuAppSecret: appSecret,
             defaultWorkingDirectory: workDir,
@@ -396,6 +397,7 @@ export function startApiServer(options: ApiServerOptions): http.Server {
           }
           entry = {
             name,
+            ...(body.description ? { description: body.description } : {}),
             telegramBotToken: token,
             defaultWorkingDirectory: workDir,
             ...(body.allowedTools ? { allowedTools: body.allowedTools } : {}),

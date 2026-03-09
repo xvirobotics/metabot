@@ -2,6 +2,7 @@
   "feishuBots": [
     {
       "name": "project-alpha",
+      "description": "Frontend development agent for Project Alpha",
       "feishuAppId": "cli_xxx",
       "feishuAppSecret": "secret1",
       "defaultWorkingDirectory": "/home/user/project-alpha"

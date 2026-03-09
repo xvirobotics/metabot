@@ -6,6 +6,7 @@ import * as path from 'node:path';
 /** Shared config fields used by MessageBridge and ClaudeExecutor (platform-agnostic). */
 export interface BotConfigBase {
   name: string;
+  description?: string;
   claude: {
     defaultWorkingDirectory: string;
     allowedTools: string[];
@@ -75,6 +76,7 @@ function commaSplit(value: string | undefined): string[] {
 
 export interface FeishuBotJsonEntry {
   name: string;
+  description?: string;
   feishuAppId: string;
   feishuAppSecret: string;
   defaultWorkingDirectory: string;
@@ -89,6 +91,7 @@ export interface FeishuBotJsonEntry {
 function feishuBotFromJson(entry: FeishuBotJsonEntry): BotConfig {
   return {
     name: entry.name,
+    ...(entry.description ? { description: entry.description } : {}),
     feishu: {
       appId: entry.feishuAppId,
       appSecret: entry.feishuAppSecret,
@@ -101,6 +104,7 @@ function feishuBotFromJson(entry: FeishuBotJsonEntry): BotConfig {
 
 export interface TelegramBotJsonEntry {
   name: string;
+  description?: string;
   telegramBotToken: string;
   defaultWorkingDirectory: string;
   allowedTools?: string[];
@@ -114,6 +118,7 @@ export interface TelegramBotJsonEntry {
 function telegramBotFromJson(entry: TelegramBotJsonEntry): TelegramBotConfig {
   return {
     name: entry.name,
+    ...(entry.description ? { description: entry.description } : {}),
     telegram: {
       botToken: entry.telegramBotToken,
     },
