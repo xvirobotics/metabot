@@ -422,6 +422,13 @@ export class MessageBridge {
         }
       }
 
+      // Auto-clear stale session when Claude can't find the conversation
+      if (lastState.status === 'error' && lastState.errorMessage &&
+          (lastState.errorMessage.includes('No conversation found') || lastState.errorMessage.includes('session'))) {
+        this.logger.info({ chatId }, 'Clearing stale session ID due to conversation not found');
+        this.sessionManager.resetSession(chatId);
+      }
+
       await this.sendFinalCard(messageId, lastState, chatId);
 
       // Audit + cost tracking
@@ -445,6 +452,13 @@ export class MessageBridge {
       await this.outputHandler.sendOutputFiles(chatId, outputsDir, processor, lastState);
     } catch (err: any) {
       this.logger.error({ err, chatId, userId }, 'Claude execution error');
+
+      // Auto-clear stale session when Claude can't find the conversation
+      const errMsg: string = err.message || '';
+      if (errMsg.includes('No conversation found') || errMsg.includes('session')) {
+        this.logger.info({ chatId }, 'Clearing stale session ID due to conversation not found');
+        this.sessionManager.resetSession(chatId);
+      }
 
       const durationMs = Date.now() - startTime;
       this.audit.log({

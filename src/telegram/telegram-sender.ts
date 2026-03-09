@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as https from 'node:https';
 import * as http from 'node:http';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import { Bot, InputFile } from 'grammy';
 import type { IMessageSender } from '../bridge/message-sender.interface.js';
 import type { CardState, CardStatus } from '../types.js';
@@ -462,9 +463,14 @@ export class TelegramSender implements IMessageSender {
 
 function downloadUrl(url: string, savePath: string): Promise<void> {
   return new Promise((resolve, reject) => {
+    const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
+    const options: https.RequestOptions = {};
+    if (proxyUrl) {
+      options.agent = new HttpsProxyAgent(proxyUrl);
+    }
     const proto = url.startsWith('https') ? https : http;
     const fileStream = fs.createWriteStream(savePath);
-    proto.get(url, (res) => {
+    proto.get(url, options, (res) => {
       if (res.statusCode !== 200) {
         fileStream.close();
         reject(new Error(`HTTP ${res.statusCode}`));

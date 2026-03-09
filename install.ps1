@@ -455,7 +455,7 @@ LOG_LEVEL=$LogLevel
 MEMORY_SERVER_URL=$MemoryServerUrl
 "@
 
-    $envContent | Out-File -FilePath $EnvFile -Encoding utf8 -NoNewline
+    [System.IO.File]::WriteAllText($EnvFile, $envContent, [System.Text.UTF8Encoding]::new($false))
     Write-Success ".env generated"
 
     # Generate bots.json (use node for safe JSON escaping)
@@ -476,7 +476,7 @@ MEMORY_SERVER_URL=$MemoryServerUrl
     }
 
     $botsResult = node -e "const c={};const f=JSON.parse(process.argv[1]);const t=JSON.parse(process.argv[2]);if(f.length>0)c.feishuBots=f;if(t.length>0)c.telegramBots=t;console.log(JSON.stringify(c,null,2))" $FeishuBotsJson $TelegramBotsJson
-    ($botsResult -join "`n") | Out-File -FilePath $BotsJson -Encoding utf8 -NoNewline
+    [System.IO.File]::WriteAllText($BotsJson, ($botsResult -join "`n"), [System.Text.UTF8Encoding]::new($false))
     Write-Success "bots.json generated"
 }
 

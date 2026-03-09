@@ -512,6 +512,12 @@ if [[ "$SKIP_CONFIG" == "false" ]]; then
     console.log(JSON.stringify(config, null, 2));
   " "$FEISHU_BOTS_JSON" "$TELEGRAM_BOTS_JSON" > "$BOTS_JSON"
   chmod 600 "$BOTS_JSON"
+
+  # Validate generated JSON
+  if ! node -e "JSON.parse(require('fs').readFileSync('$BOTS_JSON','utf-8'))" 2>/dev/null; then
+    error "Generated bots.json is invalid. Please check your bot name and credentials for special characters."
+    exit 1
+  fi
   success "bots.json generated"
 fi
 
