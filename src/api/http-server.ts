@@ -10,7 +10,6 @@ import { installSkillsToWorkDir } from './skills-installer.js';
 import { metrics } from '../utils/metrics.js';
 import { FeishuDocReader } from '../feishu/doc-reader.js';
 import type { PeerManager } from './peer-manager.js';
-import { handleVoiceRequest, doubaoTTS, openaiTTS, elevenlabsTTS, resolveTTSProvider, resolveTTSVoice } from './voice-handler.js';
 
 interface ApiServerOptions {
   port: number;
