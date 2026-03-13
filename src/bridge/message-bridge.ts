@@ -400,7 +400,7 @@ export class MessageBridge {
 
         // Throttled card update for non-final states
         rateLimiter.schedule(() => {
-          this.sender.updateCard(messageId, state);
+          this.sender.updateCard(messageId, state).catch(() => {});
         });
       }
 
@@ -624,7 +624,7 @@ export class MessageBridge {
 
         if (sendCards && messageId) {
           rateLimiter.schedule(() => {
-            this.sender.updateCard(messageId!, state);
+            this.sender.updateCard(messageId!, state).catch(() => {});
           });
         }
       }
@@ -763,7 +763,8 @@ export class MessageBridge {
     }
   }
 
-  destroy(): void {
+  async destroy(): Promise<void> {
+    const updatePromises: Promise<void>[] = [];
     for (const [chatId, task] of this.runningTasks) {
       if (task.questionTimeoutId) {
         clearTimeout(task.questionTimeoutId);
@@ -771,7 +772,26 @@ export class MessageBridge {
       task.executionHandle.finish();
       task.abortController.abort();
       this.logger.info({ chatId }, 'Aborted running task during shutdown');
+
+      // Send final card update so the card doesn't stay stuck in "Running"
+      if (task.cardMessageId) {
+        const finalState: CardState = {
+          status: 'error',
+          userPrompt: '',
+          responseText: '',
+          toolCalls: [],
+          errorMessage: 'Service restarted',
+        };
+        updatePromises.push(
+          this.sender.updateCard(task.cardMessageId, finalState).catch(() => {}),
+        );
+      }
     }
+    // Wait briefly for card updates to complete
+    await Promise.race([
+      Promise.all(updatePromises),
+      new Promise<void>((r) => setTimeout(r, 3000)),
+    ]);
     this.runningTasks.clear();
     this.sessionManager.destroy();
   }
