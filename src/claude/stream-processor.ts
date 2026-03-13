@@ -35,7 +35,7 @@ export class StreamProcessor {
 
   processMessage(message: SDKMessage): CardState {
     // Capture session_id from any message
-    if (message.session_id && !this.sessionId) {
+    if (message.session_id) {
       this.sessionId = message.session_id;
     }
 
