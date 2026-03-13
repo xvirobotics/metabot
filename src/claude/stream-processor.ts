@@ -9,7 +9,10 @@ const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bm
  * The bridge must detect them and respond (either by asking the user
  * or auto-responding) to prevent the stream from hanging.
  */
-const AUTO_RESPOND_TOOLS = new Set(['ExitPlanMode', 'EnterPlanMode']);
+// ExitPlanMode and EnterPlanMode are handled automatically by the SDK
+// in bypassPermissions mode. Do NOT auto-respond to them from the bridge,
+// as the SDK already sends a tool_result, causing duplicate tool_result errors.
+const AUTO_RESPOND_TOOLS = new Set<string>();
 
 export interface AutoRespondTool {
   toolUseId: string;

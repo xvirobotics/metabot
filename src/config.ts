@@ -13,6 +13,8 @@ export interface BotConfigBase {
     maxTurns: number | undefined;
     maxBudgetUsd: number | undefined;
     model: string | undefined;
+    thinking: Record<string, unknown> | undefined;
+    effort: 'low' | 'medium' | 'high' | 'max' | undefined;
     outputsBaseDir: string;
     downloadsDir: string;
   };
@@ -84,6 +86,8 @@ export interface FeishuBotJsonEntry {
   maxTurns?: number;
   maxBudgetUsd?: number;
   model?: string;
+  thinking?: Record<string, unknown>;
+  effort?: 'low' | 'medium' | 'high' | 'max';
   outputsBaseDir?: string;
   downloadsDir?: string;
 }
@@ -111,6 +115,8 @@ export interface TelegramBotJsonEntry {
   maxTurns?: number;
   maxBudgetUsd?: number;
   model?: string;
+  thinking?: Record<string, unknown>;
+  effort?: 'low' | 'medium' | 'high' | 'max';
   outputsBaseDir?: string;
   downloadsDir?: string;
 }
@@ -134,6 +140,8 @@ function buildClaudeConfig(entry: {
   maxTurns?: number;
   maxBudgetUsd?: number;
   model?: string;
+  thinking?: Record<string, unknown>;
+  effort?: 'low' | 'medium' | 'high' | 'max';
   outputsBaseDir?: string;
   downloadsDir?: string;
 }): BotConfigBase['claude'] {
@@ -144,6 +152,8 @@ function buildClaudeConfig(entry: {
     maxTurns: entry.maxTurns ?? (process.env.CLAUDE_MAX_TURNS ? parseInt(process.env.CLAUDE_MAX_TURNS, 10) : undefined),
     maxBudgetUsd: entry.maxBudgetUsd ?? (process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined),
     model: entry.model || process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || 'claude-opus-4-6',
+    thinking: entry.thinking ?? { type: 'adaptive' },
+    effort: entry.effort ?? 'max',
     outputsBaseDir: entry.outputsBaseDir || process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), 'metabot-outputs'),
     downloadsDir: entry.downloadsDir || process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), 'metabot-downloads'),
   };
@@ -166,6 +176,8 @@ function feishuBotFromEnv(): BotConfig {
       maxTurns: process.env.CLAUDE_MAX_TURNS ? parseInt(process.env.CLAUDE_MAX_TURNS, 10) : undefined,
       maxBudgetUsd: process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined,
       model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
+      thinking: { type: 'adaptive' },
+      effort: 'max',
       outputsBaseDir: process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), 'metabot-outputs'),
       downloadsDir: process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), 'metabot-downloads'),
     },
@@ -186,6 +198,8 @@ function telegramBotFromEnv(): TelegramBotConfig {
       maxTurns: process.env.CLAUDE_MAX_TURNS ? parseInt(process.env.CLAUDE_MAX_TURNS, 10) : undefined,
       maxBudgetUsd: process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined,
       model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
+      thinking: { type: 'adaptive' },
+      effort: 'max',
       outputsBaseDir: process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), 'metabot-outputs'),
       downloadsDir: process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), 'metabot-downloads'),
     },

@@ -1,4 +1,6 @@
 import { execSync, spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKUserMessage, SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
@@ -133,7 +135,7 @@ export class ClaudeExecutor {
       // process.execPath to avoid PATH issues on Windows; fileURLToPath converts
       // file:// URLs to native paths for the SDK CLI entrypoint.
       spawnClaudeCodeProcess: customSpawn,
-      executableArgs: [fileURLToPath(import.meta.resolve('@anthropic-ai/claude-agent-sdk/cli.js'))],
+      executableArgs: [join(dirname(createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk')), 'cli.js')],
       pathToClaudeCodeExecutable: CLAUDE_EXECUTABLE,
     };
 
@@ -171,6 +173,15 @@ export class ClaudeExecutor {
 
     if (this.config.claude.model) {
       queryOptions.model = this.config.claude.model;
+    }
+
+    // Enable adaptive thinking with max effort for strongest reasoning
+    if (this.config.claude.thinking) {
+      queryOptions.thinking = this.config.claude.thinking;
+    }
+
+    if (this.config.claude.effort) {
+      queryOptions.effort = this.config.claude.effort;
     }
 
     if (sessionId) {
@@ -222,9 +233,16 @@ export class ClaudeExecutor {
       }
     }
 
+    const answeredToolUseIds = new Set<string>();
+
     return {
       stream: wrapStream(),
       sendAnswer: (toolUseId: string, sid: string, answerText: string) => {
+        if (answeredToolUseIds.has(toolUseId)) {
+          logger.warn({ toolUseId }, 'Duplicate tool_result suppressed');
+          return;
+        }
+        answeredToolUseIds.add(toolUseId);
         logger.info({ toolUseId }, 'Sending answer to Claude');
         const answerMessage: SDKUserMessage = {
           type: 'user',

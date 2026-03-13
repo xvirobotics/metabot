@@ -209,7 +209,7 @@ async function main() {
   });
 
   // Graceful shutdown
-  const shutdown = () => {
+  const shutdown = async () => {
     logger.info('Shutting down...');
     scheduler.destroy();
     apiServer.close();
@@ -220,13 +220,18 @@ async function main() {
       memoryServer.server.close();
       memoryServer.storage.close();
     }
+    const destroyPromises: Promise<void>[] = [];
     for (const handle of feishuHandles) {
-      handle.bridge.destroy();
+      destroyPromises.push(handle.bridge.destroy());
     }
     for (const handle of telegramHandles) {
-      handle.bridge.destroy();
+      destroyPromises.push(handle.bridge.destroy());
       handle.bot.stop();
     }
+    await Promise.race([
+      Promise.all(destroyPromises),
+      new Promise<void>((r) => setTimeout(r, 5000)),
+    ]);
     process.exit(0);
   };
 
