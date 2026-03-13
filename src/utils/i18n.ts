@@ -31,12 +31,12 @@ const messages = {
     zh: '有任务正在运行。使用 `/stop` 终止它，或等待完成。',
   },
   timeout_1h: {
-    en: 'Task timed out (1 hour limit)',
-    zh: '任务超时（1小时限制）',
+    en: 'Task timed out (24 hour limit)',
+    zh: '任务超时（24小时限制）',
   },
   idle_timeout: {
-    en: 'Task aborted: no activity for 5 minutes',
-    zh: '任务终止：5分钟无活动',
+    en: 'Task aborted: no activity for 1 hour',
+    zh: '任务终止：1小时无活动',
   },
   task_stopped: {
     en: 'Task was stopped',

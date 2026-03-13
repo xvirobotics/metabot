@@ -51,19 +51,48 @@ function jsonResponse(res: http.ServerResponse, status: number, body: unknown): 
   res.end(json);
 }
 
+const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
+
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString()));
+    let totalSize = 0;
+    let tooLarge = false;
+    req.on('data', (chunk: Buffer) => {
+      if (tooLarge) return;
+      totalSize += chunk.length;
+      if (totalSize > MAX_BODY_SIZE) {
+        tooLarge = true;
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (tooLarge) {
+        reject(new PayloadTooLargeError());
+        return;
+      }
+      resolve(Buffer.concat(chunks).toString());
+    });
     req.on('error', reject);
   });
+}
+
+class PayloadTooLargeError extends Error {
+  statusCode = 413;
+  constructor() {
+    super('Request body too large (max 10 MB)');
+  }
 }
 
 async function parseJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   const raw = await readBody(req);
   if (!raw) return {};
-  return JSON.parse(raw) as Record<string, unknown>;
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    throw Object.assign(new Error('Invalid JSON in request body'), { statusCode: 400 });
+  }
 }
 
 // Resolve the static directory — works for both src/ (tsx) and dist/ (compiled)
@@ -128,17 +157,6 @@ export function startMemoryServer(options: MemoryServerOptions): { server: http.
       return;
     }
 
-    // Resolve role for API routes
-    let role: Role = 'admin';
-    if (pathname.startsWith('/api/')) {
-      const resolved = resolveRole(req);
-      if (resolved === null) {
-        jsonResponse(res, 401, { detail: 'Unauthorized' });
-        return;
-      }
-      role = resolved;
-    }
-
     try {
       // --- API Routes ---
 
@@ -147,6 +165,17 @@ export function startMemoryServer(options: MemoryServerOptions): { server: http.
         const result = handleHealth(storage);
         jsonResponse(res, result.status, result.body);
         return;
+      }
+
+      // Resolve role for authenticated API routes
+      let role: Role = 'admin';
+      if (pathname.startsWith('/api/')) {
+        const resolved = resolveRole(req);
+        if (resolved === null) {
+          jsonResponse(res, 401, { detail: 'Unauthorized' });
+          return;
+        }
+        role = resolved;
       }
 
       // Folders
@@ -253,6 +282,10 @@ export function startMemoryServer(options: MemoryServerOptions): { server: http.
       // 404 fallback
       jsonResponse(res, 404, { detail: 'Not found' });
     } catch (err: any) {
+      if (typeof err?.statusCode === 'number') {
+        jsonResponse(res, err.statusCode, { detail: err.message || 'Request error' });
+        return;
+      }
       logger.error({ err, method, url: rawUrl }, 'MetaMemory request error');
       jsonResponse(res, 500, { detail: err.message || 'Internal server error' });
     }

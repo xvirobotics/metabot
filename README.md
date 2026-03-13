@@ -101,7 +101,7 @@ Prerequisites: Node.js 20+, [Claude Code CLI](https://github.com/anthropics/clau
 1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → copy token
 2. Add to `bots.json` → done (long polling, no webhooks)
 
-**Feishu/Lark** ([detailed guide](docs/feishu-setup.md)):
+**Feishu/Lark**:
 1. Create app at [open.feishu.cn](https://open.feishu.cn/) → add Bot capability
 2. Enable permissions: `im:message`, `im:message:readonly`, `im:resource`, `docx:document:readonly`, `wiki:wiki` (for doc reading & wiki sync)
 3. Start MetaBot, then enable persistent connection + `im.message.receive_v1` event
@@ -143,7 +143,6 @@ Prerequisites: Node.js 20+, [Claude Code CLI](https://github.com/anthropics/clau
 | `defaultWorkingDirectory` | Yes | — | Working directory for Claude |
 | `feishuAppId` / `feishuAppSecret` | Feishu | — | Feishu app credentials |
 | `telegramBotToken` | Telegram | — | Telegram bot token |
-| `allowedTools` | No | Read,Edit,Write,Glob,Grep,Bash | Claude tools whitelist |
 | `maxTurns` / `maxBudgetUsd` | No | unlimited | Execution limits |
 | `model` | No | SDK default | Claude model |
 
@@ -172,7 +171,6 @@ Prerequisites: Node.js 20+, [Claude Code CLI](https://github.com/anthropics/clau
 | `CLAUDE_EXECUTABLE_PATH` | auto-detect | Path to `claude` binary (resolved via `which` if not set) |
 | `METABOT_URL` | `http://localhost:9100` | MetaBot API URL (for CLI remote access) |
 | `META_MEMORY_URL` | `http://localhost:8100` | MetaMemory server URL (for CLI remote access) |
-| `WEBHOOK_URLS` | — | Comma-separated webhook URLs for task completion notifications |
 | `LOG_LEVEL` | info | Log level |
 
 </details>
@@ -197,7 +195,6 @@ MetaBot runs Claude Code in `bypassPermissions` mode — no interactive approval
 
 - Claude has full read/write/execute access to the working directory
 - Control access via Feishu/Telegram platform settings (app visibility, group membership)
-- Use `allowedTools` to restrict capabilities (remove `Bash` for read-only)
 - Use `maxBudgetUsd` to cap cost per request
 - `API_SECRET` enables Bearer auth on both the API server and MetaMemory
 - MetaMemory supports **folder-level ACL**: set `MEMORY_ADMIN_TOKEN` and `MEMORY_TOKEN` for dual-role access. Admin sees all folders; reader only sees folders with `visibility: shared`. Use `PUT /api/folders/:id` with `{"visibility":"private"}` to lock a folder
@@ -216,6 +213,9 @@ MetaBot runs Claude Code in `bypassPermissions` mode — no interactive approval
 | `/help` | Show help |
 | `/metaskill ...` | Generate agent teams, agents, or skills |
 | `/metabot` | Agent bus, scheduling, and bot management API docs (loaded on demand) |
+| `/report-bug <desc>` | Report a bug — interviews you and creates a GitHub issue |
+| `/request-feature <idea>` | Request a feature — refines your idea and creates a GitHub issue |
+| `/fix-issue <number\|list>` | Pick and fix a GitHub issue — branches, commits, and creates a PR |
 | `/anything` | Any unrecognized command is forwarded to Claude Code as a skill |
 
 ## API Reference
@@ -295,6 +295,29 @@ API_SECRET=your-secret                    # shared auth token
 ```
 
 This allows multiple machines to share the same MetaBot and MetaMemory instance — local bots can delegate tasks to a remote agent bus, and any machine can read/write shared memory.
+
+## Contributing
+
+MetaBot ships with Claude Code skills that streamline the contribution workflow. Use them from the terminal or directly from Feishu/Telegram chat.
+
+| Command | Description |
+|---------|-------------|
+| `/report-bug` | Interviews you about a bug, drafts a GitHub issue with environment info, and creates it after your approval. |
+| `/request-feature` | Helps refine your feature idea, checks for existing similar functionality, and creates a well-structured feature request issue. |
+| `/fix-issue [number]` | Picks an open issue, claims it, creates a branch, implements the fix, runs CI, and submits a PR — all guided step by step. |
+
+**From the terminal:**
+
+```bash
+claude "/report-bug card builder crashes on empty content"
+claude "/request-feature support Slack as an IM platform"
+claude "/fix-issue 42"
+claude "/fix-issue list"
+```
+
+**From Feishu/Telegram:** Send the same commands as chat messages (e.g. `/report-bug ...`). The bot forwards them to Claude Code, which runs the skill and responds with interactive cards.
+
+For full contribution guidelines (code style, branching, PR checklist), see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Development
 
