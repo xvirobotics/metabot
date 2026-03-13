@@ -25,7 +25,16 @@ cmd_update() {
 
   info "Pulling latest code..."
   cd "$METABOT_HOME"
+  local old_head
+  old_head="$(git rev-parse HEAD)"
   git pull --ff-only || { error "git pull failed"; exit 1; }
+
+  # Re-exec with the updated script if bin/metabot changed (avoids running stale code)
+  if [[ -z "${METABOT_REEXEC:-}" ]] && ! git diff --quiet "$old_head" HEAD -- bin/metabot 2>/dev/null; then
+    info "metabot CLI updated, re-launching with new version..."
+    export METABOT_REEXEC=1
+    exec "$METABOT_HOME/bin/metabot" update
+  fi
 
   info "Installing dependencies..."
   npm install --production=false
