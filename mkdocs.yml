@@ -1,0 +1,95 @@
+site_name: MetaBot
+site_url: https://xvirobotics.github.io/metabot
+site_description: Infrastructure for building a supervised, self-improving agent organization
+repo_url: https://github.com/xvirobotics/metabot
+repo_name: xvirobotics/metabot
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.tabs.link
+    - search.highlight
+    - search.suggest
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/xvirobotics/metabot
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Setup: getting-started/quick-setup.md
+    - Feishu App Setup: getting-started/feishu-app-setup.md
+  - Concepts:
+    - Architecture: concepts/architecture.md
+    - Session Isolation: concepts/session-isolation.md
+    - Security: concepts/security.md
+  - Features:
+    - MetaSkill: features/metaskill.md
+    - MetaMemory: features/metamemory.md
+    - Peers Federation: features/peers.md
+    - Task Scheduler: features/scheduler.md
+    - Wiki Sync: features/wiki-sync.md
+    - Feishu Doc Reader: features/feishu-doc-reader.md
+    - Output Files: features/outputs.md
+  - Configuration:
+    - Environment Variables: configuration/environment-variables.md
+    - Multi-Bot Mode: configuration/multi-bot.md
+  - Usage:
+    - Chat Commands: usage/chat-commands.md
+    - Example Prompts: usage/example-prompts.md
+    - Use Cases: usage/use-cases.md
+  - Reference:
+    - REST API: reference/api.md
+    - mb CLI (Agent Bus): reference/cli-mb.md
+    - mm CLI (MetaMemory): reference/cli-mm.md
+    - fd CLI (Feishu Docs): reference/cli-fd.md
+    - metabot CLI: reference/cli-metabot.md
+  - Deployment:
+    - Production: deployment/production.md
+  - Development:
+    - Contributing: development/contributing.md
+    - Project Structure: development/project-structure.md
+  - Troubleshooting: troubleshooting.md
+  - About: about.md
