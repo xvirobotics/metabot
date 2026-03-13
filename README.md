@@ -18,7 +18,7 @@ Claude Code is the most capable AI coding agent — but it's trapped in your lap
 
 MetaBot sets it free. It gives every agent a Claude Code brain, persistent shared memory, the ability to create new agents, and a communication bus. All accessible from Feishu or Telegram on your phone.
 
-We built MetaBot to run [XVI Robotics](https://github.com/xvirobotics) as an **agent-native company** — a small team of humans supervising an organization of self-improving AI agents. This is the infrastructure that makes it possible.
+We built MetaBot to run [XVI Robotics](https://xvirobotics.com) as an **agent-native company** — a small team of humans supervising an organization of self-improving AI agents. This is the infrastructure that makes it possible.
 
 ## How It Works
 
@@ -113,6 +113,86 @@ Prerequisites: Node.js 20+, [Claude Code CLI](https://github.com/anthropics/clau
 - **Multi-agent team** — frontend bot, backend bot, infra bot, each in their own workspace, talking via the Agent Bus
 - **Self-growing organization** — a manager bot that creates new agents on demand, assigns tasks, schedules follow-ups
 - **Autonomous research pipeline** — agents that search, analyze, save findings to MetaMemory, and schedule next steps
+
+## Example Prompts
+
+New to MetaBot? Here are real prompts you can send in Feishu/Telegram to unlock its advanced features.
+
+### MetaMemory — Persistent Knowledge
+
+```
+Remember the deployment guide we just discussed — save it to MetaMemory
+under /projects/deployment.
+```
+
+```
+Search MetaMemory for our API design conventions.
+```
+
+```
+Summarize today's code review findings and save them to MetaMemory
+for the team to reference later.
+```
+
+### MetaSkill — Agent & Skill Factory
+
+```
+/metaskill Create an agent team for this React Native project —
+I need a frontend specialist, a backend API specialist, and a code reviewer.
+```
+
+```
+/metaskill Create a skill that reads our Jira board and summarizes
+open tickets.
+```
+
+### Scheduling — Automated Tasks
+
+```
+Schedule a daily task at 9am: search Hacker News and TechCrunch for AI news,
+summarize the top 5 stories, and save the summary to MetaMemory.
+```
+
+```
+Remind me in 30 minutes to check if the deployment succeeded.
+```
+
+```
+Set up a weekly Monday 8am task: review last week's git commits, generate
+a progress report, and save it to MetaMemory under /reports.
+```
+
+### Agent-to-Agent — Task Delegation
+
+```
+Delegate this bug fix to backend-bot: "Fix the null pointer exception
+in /api/users/:id endpoint, see the error log in MetaMemory /logs/errors".
+```
+
+```
+Ask frontend-bot to update the dashboard UI, and at the same time
+ask backend-bot to add the new API endpoint. Both should save their
+progress to MetaMemory under /projects/dashboard.
+```
+
+### Combined Workflows
+
+```
+Research best practices for WebSocket authentication, create a detailed
+implementation plan, then save the plan to MetaMemory under
+/architecture/websocket-auth for the team to review.
+```
+
+```
+Read this Feishu doc [paste URL], extract the product requirements, break
+them into tasks, and schedule a daily standup summary at 6pm that tracks
+progress against these requirements.
+```
+
+```
+/metaskill Create a "daily-ops" agent that runs every morning at 8am:
+checks service health, reviews overnight error logs, and posts a summary.
+```
 
 ## Configuration
 
@@ -321,7 +401,7 @@ pm2 startup && pm2 save             # auto-start on boot
 
 ## About
 
-MetaBot is built by [XVI Robotics](https://github.com/xvirobotics), where we develop humanoid robot brains. We use MetaBot internally to run our company as an agent-native organization — a small team of humans supervising self-improving AI agents. We open-sourced it because we believe this is how companies will work in the future.
+MetaBot is built by [XVI Robotics](https://xvirobotics.com), where we develop humanoid robot brains. We use MetaBot internally to run our company as an agent-native organization — a small team of humans supervising self-improving AI agents. We open-sourced it because we believe this is how companies will work in the future.
 
 ## Star History
 
