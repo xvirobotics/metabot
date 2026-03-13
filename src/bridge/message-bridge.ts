@@ -906,7 +906,7 @@ export class MessageBridge {
 
 export function isStaleSessionError(errorMessage?: string): boolean {
   if (!errorMessage) return false;
-  return /no conversation found|conversation not found|session id|invalid session/i.test(errorMessage);
+  return /no conversation found|conversation not found|session id|invalid session|multiple.*tool_result.*blocks|each tool_use must have a single result/i.test(errorMessage);
 }
 
 /**

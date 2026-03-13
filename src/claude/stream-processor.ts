@@ -138,18 +138,21 @@ export class StreamProcessor {
       tool.status = 'done';
     }
 
+    const resultText = message.result || this.responseText;
     const isError = message.subtype !== 'success';
+    // SDK sometimes wraps API errors as "success" with the error text as result
+    const isApiError = !isError && isApiErrorResult(resultText);
 
     return {
-      status: isError ? 'error' : 'complete',
+      status: (isError || isApiError) ? 'error' : 'complete',
       userPrompt: this.userPrompt,
-      responseText: message.result || this.responseText,
+      responseText: isApiError ? '' : resultText,
       toolCalls: [...this.toolCalls],
       costUsd: this.costUsd,
       durationMs: this.durationMs,
       errorMessage: isError
         ? (message.errors?.join('; ') || `Ended with: ${message.subtype}`)
-        : undefined,
+        : isApiError ? resultText : undefined,
     };
   }
 
@@ -297,4 +300,10 @@ function shortenPath(filePath: string): string {
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
   return text.slice(0, max) + '...';
+}
+
+/** Detect API error responses that the SDK wraps as successful results */
+function isApiErrorResult(text: string): boolean {
+  if (!text) return false;
+  return /^API Error:\s*\d{3}\s/i.test(text);
 }
