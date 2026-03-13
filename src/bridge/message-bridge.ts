@@ -223,6 +223,16 @@ export class MessageBridge {
     task.executionHandle.sendAnswer(pending.toolUseId, sessionId, answerJson);
 
     this.logger.info({ chatId, answer: answerText, toolUseId: pending.toolUseId }, 'Sent user answer to Claude');
+
+    // Update the card: remove question UI, show "running" with answer confirmation
+    const currentState = task.processor.getCurrentState();
+    await this.sender.updateCard(task.cardMessageId, {
+      ...currentState,
+      status: 'running',
+      responseText: currentState.responseText
+        ? currentState.responseText + `\n\n> **Reply:** ${answerText}\n\n_Continuing..._`
+        : `> **Reply:** ${answerText}\n\n_Continuing..._`,
+    });
   }
 
   private async executeQuery(msg: IncomingMessage): Promise<void> {

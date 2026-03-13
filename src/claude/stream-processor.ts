@@ -230,6 +230,23 @@ export class StreamProcessor {
     return tools;
   }
 
+  /** Return the current card state without processing a new message. */
+  getCurrentState(): CardState {
+    const hasActiveTools = this.toolCalls.some((t) => t.status === 'running');
+    const status = this._pendingQuestion
+      ? 'waiting_for_input'
+      : hasActiveTools ? 'running' : this.responseText ? 'running' : 'thinking';
+    return {
+      status,
+      userPrompt: this.userPrompt,
+      responseText: this.responseText,
+      toolCalls: [...this.toolCalls],
+      costUsd: this.costUsd,
+      durationMs: this.durationMs,
+      pendingQuestion: this._pendingQuestion || undefined,
+    };
+  }
+
   getSessionId(): string | undefined {
     return this.sessionId;
   }
