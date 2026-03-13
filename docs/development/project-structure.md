@@ -24,11 +24,8 @@ metabot/
 │   │   └── doc-reader.ts           # Document → Markdown
 │   ├── telegram/
 │   │   └── ...                     # Telegram bot integration
-│   ├── web/
-│   │   └── ws-server.ts            # WebSocket server + static files
 │   ├── api/
 │   │   ├── http-server.ts          # REST API server
-│   │   ├── voice-handler.ts        # Voice API (STT + Agent + TTS)
 │   │   ├── bot-registry.ts         # Bot registry
 │   │   └── peer-manager.ts         # Cross-instance federation
 │   ├── memory/
@@ -48,16 +45,9 @@ metabot/
 │   ├── mb                          # Agent Bus CLI
 │   ├── mm                          # MetaMemory CLI
 │   └── fd                          # Feishu Doc Reader CLI
-├── web/                            # Web UI source (React + Vite)
-│   ├── src/
-│   │   ├── components/             # React components
-│   │   ├── hooks/                  # Custom hooks (WebSocket)
-│   │   ├── store.ts                # Zustand state management
-│   │   └── theme.css               # Design system
-│   └── vite.config.ts
 ├── tests/                          # Vitest test files
 ├── docs/                           # Documentation (MkDocs)
-├── dist/                           # Compiled output (includes dist/web/)
+├── dist/                           # Compiled output
 ├── mkdocs.yml                      # MkDocs configuration
 ├── bots.example.json               # Multi-bot config example
 ├── .env.example                    # Environment config example

@@ -6,8 +6,6 @@ on:
     paths:
       - 'docs/**'
       - 'mkdocs.yml'
-      - '.github/workflows/docs.yml'
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,6 +20,6 @@ jobs:
         with:
           python-version: '3.x'
 
-      - run: pip install mkdocs-material mkdocs-static-i18n
+      - run: pip install mkdocs-material
 
       - run: mkdocs gh-deploy --force
