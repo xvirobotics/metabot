@@ -22,5 +22,17 @@
       "telegramBotToken": "123456:ABC-DEF...",
       "defaultWorkingDirectory": "/home/user/project"
     }
+  ],
+  "peers": [
+    {
+      "name": "alice",
+      "url": "http://localhost:9200",
+      "secret": "alice-api-secret"
+    },
+    {
+      "name": "remote-team",
+      "url": "http://remote-server:9100",
+      "secret": "remote-api-secret"
+    }
   ]
 }

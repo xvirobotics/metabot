@@ -32,6 +32,12 @@ export interface TelegramBotConfig extends BotConfigBase {
   };
 }
 
+export interface PeerConfig {
+  name: string;
+  url: string;
+  secret?: string;
+}
+
 export interface AppConfig {
   feishuBots: BotConfig[];
   telegramBots: TelegramBotConfig[];
@@ -56,6 +62,8 @@ export interface AppConfig {
     adminToken?: string;
     readerToken?: string;
   };
+  /** Peer MetaBot instances for cross-instance bot discovery and task delegation. */
+  peers: PeerConfig[];
 }
 
 function required(name: string): string {
@@ -177,9 +185,16 @@ function telegramBotFromEnv(): TelegramBotConfig {
 
 // --- New bots.json format ---
 
+export interface PeerJsonEntry {
+  name: string;
+  url: string;
+  secret?: string;
+}
+
 export interface BotsJsonNewFormat {
   feishuBots?: FeishuBotJsonEntry[];
   telegramBots?: TelegramBotJsonEntry[];
+  peers?: PeerJsonEntry[];
 }
 
 export function loadAppConfig(): AppConfig {
@@ -187,11 +202,13 @@ export function loadAppConfig(): AppConfig {
 
   let feishuBots: BotConfig[] = [];
   let telegramBots: TelegramBotConfig[] = [];
+  let parsedConfig: unknown;
 
   if (botsConfigPath) {
     const resolved = path.resolve(botsConfigPath);
     const raw = fs.readFileSync(resolved, 'utf-8');
     const parsed = JSON.parse(raw);
+    parsedConfig = parsed;
 
     if (Array.isArray(parsed)) {
       // Old format: array of feishu bot entries (backward compatible)
@@ -259,6 +276,29 @@ export function loadAppConfig(): AppConfig {
   const memoryAdminToken = process.env.MEMORY_ADMIN_TOKEN || undefined;
   const memoryReaderToken = process.env.MEMORY_TOKEN || undefined;
 
+  // Parse peers from JSON config and/or env vars
+  const peers: PeerConfig[] = [];
+  if (botsConfigPath && parsedConfig && !Array.isArray(parsedConfig)) {
+    const cfg = parsedConfig as BotsJsonNewFormat;
+    if (cfg.peers) {
+      for (const p of cfg.peers) {
+        peers.push({ name: p.name, url: p.url.replace(/\/+$/, ''), secret: p.secret });
+      }
+    }
+  }
+  if (process.env.METABOT_PEERS) {
+    const urls = process.env.METABOT_PEERS.split(',').map((u) => u.trim()).filter(Boolean);
+    const secrets = (process.env.METABOT_PEER_SECRETS || '').split(',').map((s) => s.trim());
+    const names = (process.env.METABOT_PEER_NAMES || '').split(',').map((s) => s.trim());
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i].replace(/\/+$/, '');
+      if (!peers.some((p) => p.url === url)) {
+        const autoName = names[i] || url.replace(/^https?:\/\//, '').replace(/[:.]/g, '-');
+        peers.push({ name: autoName, url, secret: secrets[i] || undefined });
+      }
+    }
+  }
+
   return {
     feishuBots,
     telegramBots,
@@ -279,5 +319,6 @@ export function loadAppConfig(): AppConfig {
       adminToken: memoryAdminToken,
       readerToken: memoryReaderToken,
     },
+    peers,
   };
 }

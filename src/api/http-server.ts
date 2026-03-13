@@ -9,6 +9,7 @@ import { addBot, removeBot, getBotEntry } from './bots-config-writer.js';
 import { installSkillsToWorkDir } from './skills-installer.js';
 import { metrics } from '../utils/metrics.js';
 import { FeishuDocReader } from '../feishu/doc-reader.js';
+import type { PeerManager } from './peer-manager.js';
 
 interface ApiServerOptions {
   port: number;
@@ -19,6 +20,7 @@ interface ApiServerOptions {
   botsConfigPath?: string;
   docSync?: DocSync;
   feishuServiceClient?: lark.Client;
+  peerManager?: PeerManager;
 }
 
 interface JsonBody {
@@ -68,7 +70,7 @@ async function parseJsonBody(req: http.IncomingMessage): Promise<JsonBody> {
 }
 
 export function startApiServer(options: ApiServerOptions): http.Server {
-  const { port, secret, registry, scheduler, logger, botsConfigPath, docSync, feishuServiceClient } = options;
+  const { port, secret, registry, scheduler, logger, botsConfigPath, docSync, feishuServiceClient, peerManager } = options;
   const host = secret ? '0.0.0.0' : '127.0.0.1';
 
   const server = http.createServer(async (req, res) => {
@@ -87,10 +89,14 @@ export function startApiServer(options: ApiServerOptions): http.Server {
     try {
       // Route: GET /api/health
       if (method === 'GET' && url === '/api/health') {
+        const peerStatuses = peerManager?.getPeerStatuses() ?? [];
         jsonResponse(res, 200, {
           status: 'ok',
           uptime: Math.floor((Date.now() - startTime) / 1000),
           bots: registry.list().length,
+          peerBots: peerManager?.getPeerBots().length ?? 0,
+          peers: peerStatuses.length,
+          peersHealthy: peerStatuses.filter((p) => p.healthy).length,
           scheduledTasks: scheduler.taskCount(),
           recurringTasks: scheduler.recurringTaskCount(),
         });
@@ -99,39 +105,98 @@ export function startApiServer(options: ApiServerOptions): http.Server {
 
       // Route: GET /api/bots
       if (method === 'GET' && url === '/api/bots') {
-        jsonResponse(res, 200, { bots: registry.list() });
+        const localBots = registry.list();
+        const peerBots = peerManager?.getPeerBots() ?? [];
+        jsonResponse(res, 200, { bots: [...localBots, ...peerBots] });
         return;
       }
 
-      // Route: POST /api/tasks
-      if (method === 'POST' && url === '/api/tasks') {
+      // Route: GET /api/peers
+      if (method === 'GET' && url === '/api/peers') {
+        jsonResponse(res, 200, { peers: peerManager?.getPeerStatuses() ?? [] });
+        return;
+      }
+
+      // Route: POST /api/talk (primary) + POST /api/tasks (deprecated alias)
+      if (method === 'POST' && (url === '/api/talk' || url === '/api/tasks')) {
         const body = await parseJsonBody(req);
-        const botName = body.botName as string;
+        const rawBotName = body.botName as string;
         const chatId = body.chatId as string;
         const prompt = body.prompt as string;
         const sendCards = body.sendCards as boolean | undefined;
 
-        if (!botName || !chatId || !prompt) {
+        if (!rawBotName || !chatId || !prompt) {
           jsonResponse(res, 400, { error: 'Missing required fields: botName, chatId, prompt' });
           return;
         }
 
-        const bot = registry.get(botName);
-        if (!bot) {
-          jsonResponse(res, 404, { error: `Bot not found: ${botName}` });
+        // Parse qualified name: "peerName/botName" or just "botName"
+        let targetPeerName: string | undefined;
+        let botName: string;
+        if (rawBotName.includes('/')) {
+          const parts = rawBotName.split('/');
+          targetPeerName = parts[0];
+          botName = parts.slice(1).join('/');
+        } else {
+          botName = rawBotName;
+        }
+
+        // If targeting a specific peer, skip local lookup
+        if (targetPeerName) {
+          if (!peerManager) {
+            jsonResponse(res, 404, { error: `No peers configured, cannot resolve: ${rawBotName}` });
+            return;
+          }
+          const peerMatch = peerManager.findBotOnPeer(targetPeerName, botName);
+          if (!peerMatch) {
+            jsonResponse(res, 404, { error: `Bot not found on peer "${targetPeerName}": ${botName}` });
+            return;
+          }
+          logger.info({ botName, peerName: targetPeerName, chatId, promptLength: prompt.length }, 'Forwarding talk to peer (qualified)');
+          try {
+            const result = await peerManager.forwardTask(peerMatch.peer, { botName, chatId, prompt, sendCards });
+            const statusCode = (result as any).success === false ? 500 : 200;
+            jsonResponse(res, statusCode, result);
+          } catch (err: any) {
+            logger.error({ err, botName, peerName: targetPeerName }, 'Peer forwarding failed');
+            jsonResponse(res, 502, { error: `Peer forwarding failed: ${err.message}` });
+          }
           return;
         }
 
-        logger.info({ botName, chatId, promptLength: prompt.length }, 'API task request');
+        // Try local registry first
+        const bot = registry.get(botName);
+        if (bot) {
+          logger.info({ botName, chatId, promptLength: prompt.length }, 'API talk request');
+          const result = await bot.bridge.executeApiTask({
+            prompt,
+            chatId,
+            userId: 'api',
+            sendCards: sendCards ?? true,
+          });
+          jsonResponse(res, result.success ? 200 : 500, result);
+          return;
+        }
 
-        const result = await bot.bridge.executeApiTask({
-          prompt,
-          chatId,
-          userId: 'api',
-          sendCards: sendCards ?? true,
-        });
+        // Bot not found locally — check peers (unless this request is already forwarded)
+        const origin = req.headers['x-metabot-origin'];
+        if (!origin && peerManager) {
+          const peerMatch = peerManager.findBotPeer(botName);
+          if (peerMatch) {
+            logger.info({ botName, peerName: peerMatch.peer.name, peerUrl: peerMatch.peer.url, chatId, promptLength: prompt.length }, 'Forwarding talk to peer');
+            try {
+              const result = await peerManager.forwardTask(peerMatch.peer, { botName, chatId, prompt, sendCards });
+              const statusCode = (result as any).success === false ? 500 : 200;
+              jsonResponse(res, statusCode, result);
+            } catch (err: any) {
+              logger.error({ err, botName, peerUrl: peerMatch.peer.url }, 'Peer forwarding failed');
+              jsonResponse(res, 502, { error: `Peer forwarding failed: ${err.message}` });
+            }
+            return;
+          }
+        }
 
-        jsonResponse(res, result.success ? 200 : 500, result);
+        jsonResponse(res, 404, { error: `Bot not found: ${botName}` });
         return;
       }
 

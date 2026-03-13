@@ -1,0 +1,267 @@
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { PeerManager } from '../src/api/peer-manager.js';
+
+function createLogger() {
+  const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn(), child: vi.fn() } as any;
+  logger.child.mockReturnValue(logger);
+  return logger;
+}
+
+describe('PeerManager', () => {
+  let manager: PeerManager;
+
+  afterEach(() => {
+    if (manager) manager.destroy();
+    vi.restoreAllMocks();
+  });
+
+  it('initializes with empty peer bots', () => {
+    manager = new PeerManager([], createLogger());
+    expect(manager.getPeerBots()).toEqual([]);
+    expect(manager.getPeerStatuses()).toEqual([]);
+  });
+
+  it('refreshPeer caches bots from a healthy peer', async () => {
+    const mockBots = {
+      bots: [
+        { name: 'bot-a', platform: 'feishu', workingDirectory: '/work/a' },
+        { name: 'bot-b', description: 'B bot', platform: 'telegram', workingDirectory: '/work/b' },
+      ],
+    };
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockBots),
+    }));
+
+    manager = new PeerManager([
+      { name: 'alice', url: 'http://localhost:9200' },
+    ], createLogger());
+
+    await manager.refreshAll();
+
+    const bots = manager.getPeerBots();
+    expect(bots).toHaveLength(2);
+    expect(bots[0].name).toBe('bot-a');
+    expect(bots[0].peerUrl).toBe('http://localhost:9200');
+    expect(bots[0].peerName).toBe('alice');
+    expect(bots[1].name).toBe('bot-b');
+    expect(bots[1].description).toBe('B bot');
+
+    const statuses = manager.getPeerStatuses();
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0].healthy).toBe(true);
+    expect(statuses[0].botCount).toBe(2);
+  });
+
+  it('marks peer as unhealthy when unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+
+    manager = new PeerManager([
+      { name: 'bob', url: 'http://unreachable:9999' },
+    ], createLogger());
+
+    await manager.refreshAll();
+
+    expect(manager.getPeerBots()).toEqual([]);
+    const statuses = manager.getPeerStatuses();
+    expect(statuses[0].healthy).toBe(false);
+    expect(statuses[0].error).toBe('ECONNREFUSED');
+  });
+
+  it('marks peer as unhealthy on non-2xx response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+    }));
+
+    manager = new PeerManager([
+      { name: 'locked', url: 'http://locked:9100' },
+    ], createLogger());
+
+    await manager.refreshAll();
+
+    expect(manager.getPeerBots()).toEqual([]);
+    const statuses = manager.getPeerStatuses();
+    expect(statuses[0].healthy).toBe(false);
+    expect(statuses[0].error).toContain('401');
+  });
+
+  it('filters out transitive bots (bots with peerUrl)', async () => {
+    const mockBots = {
+      bots: [
+        { name: 'local-bot', platform: 'feishu', workingDirectory: '/work' },
+        { name: 'transitive-bot', platform: 'feishu', workingDirectory: '/other', peerUrl: 'http://third:9300' },
+      ],
+    };
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockBots),
+    }));
+
+    manager = new PeerManager([
+      { name: 'alice', url: 'http://localhost:9200' },
+    ], createLogger());
+
+    await manager.refreshAll();
+
+    const bots = manager.getPeerBots();
+    expect(bots).toHaveLength(1);
+    expect(bots[0].name).toBe('local-bot');
+  });
+
+  it('findBotPeer returns correct peer', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        bots: [{ name: 'backend-bot', platform: 'feishu', workingDirectory: '/work' }],
+      }),
+    }));
+
+    manager = new PeerManager([
+      { name: 'alice', url: 'http://localhost:9200', secret: 'sec' },
+    ], createLogger());
+
+    await manager.refreshAll();
+
+    const result = manager.findBotPeer('backend-bot');
+    expect(result).toBeDefined();
+    expect(result!.peer.name).toBe('alice');
+    expect(result!.bot.name).toBe('backend-bot');
+  });
+
+  it('findBotPeer returns undefined for unknown bot', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ bots: [] }),
+    }));
+
+    manager = new PeerManager([
+      { name: 'alice', url: 'http://localhost:9200' },
+    ], createLogger());
+
+    await manager.refreshAll();
+    expect(manager.findBotPeer('nonexistent')).toBeUndefined();
+  });
+
+  it('findBotOnPeer returns bot from specific peer', async () => {
+    const fetchMock = vi.fn();
+    // First peer: alice
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        bots: [{ name: 'bot-a', platform: 'feishu', workingDirectory: '/a' }],
+      }),
+    });
+    // Second peer: bob
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        bots: [{ name: 'bot-b', platform: 'telegram', workingDirectory: '/b' }],
+      }),
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    manager = new PeerManager([
+      { name: 'alice', url: 'http://localhost:9200' },
+      { name: 'bob', url: 'http://localhost:9300' },
+    ], createLogger());
+
+    await manager.refreshAll();
+
+    const result = manager.findBotOnPeer('bob', 'bot-b');
+    expect(result).toBeDefined();
+    expect(result!.peer.name).toBe('bob');
+
+    // Should not find alice's bot on bob
+    expect(manager.findBotOnPeer('bob', 'bot-a')).toBeUndefined();
+  });
+
+  it('forwardTask sends POST with X-MetaBot-Origin header', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ success: true, responseText: 'done' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    manager = new PeerManager([], createLogger());
+
+    const result = await manager.forwardTask(
+      { name: 'alice', url: 'http://localhost:9200', secret: 'sec' },
+      { botName: 'bot-a', chatId: 'chat1', prompt: 'hello' },
+    );
+
+    expect(result).toEqual({ success: true, responseText: 'done' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:9200/api/talk',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'X-MetaBot-Origin': 'peer',
+          'Authorization': 'Bearer sec',
+        }),
+      }),
+    );
+  });
+
+  it('sends auth header when peer has secret', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ bots: [] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    manager = new PeerManager([
+      { name: 'secure-peer', url: 'http://remote:9100', secret: 'my-secret' },
+    ], createLogger());
+
+    await manager.refreshAll();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://remote:9100/api/bots',
+      expect.objectContaining({
+        headers: { 'Authorization': 'Bearer my-secret' },
+      }),
+    );
+  });
+
+  it('does not send auth header when peer has no secret', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ bots: [] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    manager = new PeerManager([
+      { name: 'local-peer', url: 'http://localhost:9200' },
+    ], createLogger());
+
+    await manager.refreshAll();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:9200/api/bots',
+      expect.objectContaining({
+        headers: {},
+      }),
+    );
+  });
+
+  it('normalizes trailing slashes in URLs', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ bots: [{ name: 'b', platform: 'feishu', workingDirectory: '/' }] }),
+    }));
+
+    manager = new PeerManager([
+      { name: 'trailing', url: 'http://localhost:9200///' },
+    ], createLogger());
+
+    await manager.refreshAll();
+
+    const bots = manager.getPeerBots();
+    expect(bots[0].peerUrl).toBe('http://localhost:9200');
+  });
+});

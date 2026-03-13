@@ -19,6 +19,10 @@ export interface BotInfo {
   description?: string;
   platform: string;
   workingDirectory: string;
+  /** Set when the bot comes from a peer instance. */
+  peerUrl?: string;
+  /** Human-readable peer identifier. */
+  peerName?: string;
 }
 
 /**

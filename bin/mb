@@ -28,19 +28,39 @@ case "$cmd" in
   bot)
     curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/bots/$1" | _json
     ;;
-  # --- Task delegation ---
-  task|t)
+  # --- Agent Talk (cross-instance auto-routing) ---
+  talk|t)
     bot="$1" chat="$2"; shift 2 2>/dev/null || true
     prompt="$*"
     if [[ -z "${bot:-}" || -z "${chat:-}" || -z "${prompt:-}" ]]; then
-      echo "Usage: mb task <botName> <chatId> <prompt>"
+      echo "Usage: mb talk [peer/]<botName> <chatId> <prompt>"
+      echo "  Examples:"
+      echo "    mb talk mybot chat123 'fix the bug'"
+      echo "    mb talk alice/backend-bot chat123 'deploy to staging'"
       exit 1
     fi
     python3 -c "
 import json, sys
 print(json.dumps({'botName': sys.argv[1], 'chatId': sys.argv[2], 'prompt': sys.argv[3], 'sendCards': True}))
 " "$bot" "$chat" "$prompt" | \
-    curl -s -X POST "$METABOT_URL/api/tasks" \
+    curl -s -X POST "$METABOT_URL/api/talk" \
+      -H "$METABOT_AUTH" -H "Content-Type: application/json" \
+      -d @-
+    ;;
+  # --- Task delegation (deprecated alias for talk) ---
+  task)
+    bot="$1" chat="$2"; shift 2 2>/dev/null || true
+    prompt="$*"
+    if [[ -z "${bot:-}" || -z "${chat:-}" || -z "${prompt:-}" ]]; then
+      echo "Usage: mb task <botName> <chatId> <prompt>"
+      echo "(Deprecated: use 'mb talk' instead)"
+      exit 1
+    fi
+    python3 -c "
+import json, sys
+print(json.dumps({'botName': sys.argv[1], 'chatId': sys.argv[2], 'prompt': sys.argv[3], 'sendCards': True}))
+" "$bot" "$chat" "$prompt" | \
+    curl -s -X POST "$METABOT_URL/api/talk" \
       -H "$METABOT_AUTH" -H "Content-Type: application/json" \
       -d @-
     ;;
@@ -104,6 +124,10 @@ print(json.dumps({'botName': sys.argv[1], 'chatId': sys.argv[2], 'cronExpr': sys
         echo "  mb schedule cancel <id>                             - Cancel a task"
         ;;
     esac
+    ;;
+  # --- Peers ---
+  peers|p)
+    curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/peers" | _json
     ;;
   # --- Stats & Metrics ---
   stats|st)
@@ -171,11 +195,15 @@ print(json.dumps({'botName': sys.argv[1], 'chatId': sys.argv[2], 'cronExpr': sys
     echo "mb - MetaBot API CLI"
     echo ""
     echo "  Bots:"
-    echo "    mb bots                          - List all bots"
+    echo "    mb bots                          - List all bots (local + peer)"
     echo "    mb bot <name>                    - Get bot details"
     echo ""
-    echo "  Tasks:"
-    echo "    mb task <bot> <chatId> <prompt>  - Delegate task to a bot"
+    echo "  Agent Talk:"
+    echo "    mb talk <bot> <chatId> <prompt>  - Talk to a bot (auto-routes to peers)"
+    echo "    mb talk peer/bot <chatId> <prompt> - Talk to a specific peer's bot"
+    echo ""
+    echo "  Peers:"
+    echo "    mb peers                         - List peers and their status"
     echo ""
     echo "  Scheduling:"
     echo "    mb schedule list                 - List all scheduled tasks"

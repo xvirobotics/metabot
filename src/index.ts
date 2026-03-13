@@ -10,6 +10,7 @@ import type { IMessageSender } from './bridge/message-sender.interface.js';
 import type { BotConfigBase } from './config.js';
 import { startTelegramBot, type TelegramBotHandle } from './telegram/telegram-bot.js';
 import { BotRegistry } from './api/bot-registry.js';
+import { PeerManager } from './api/peer-manager.js';
 import { TaskScheduler } from './scheduler/task-scheduler.js';
 import { startApiServer } from './api/http-server.js';
 import { startMemoryServer } from './memory/memory-server.js';
@@ -147,6 +148,16 @@ async function main() {
   // Create task scheduler
   const scheduler = new TaskScheduler(registry, logger);
 
+  // Initialize peer manager for cross-instance bot discovery
+  let peerManager: PeerManager | undefined;
+  if (appConfig.peers.length > 0) {
+    peerManager = new PeerManager(appConfig.peers, logger);
+    await peerManager.refreshAll();
+    const statuses = peerManager.getPeerStatuses();
+    const healthyCount = statuses.filter((s) => s.healthy).length;
+    logger.info({ peerCount: statuses.length, healthyPeers: healthyCount }, 'Peer manager initialized');
+  }
+
   // Start embedded MetaMemory server
   let memoryServer: ReturnType<typeof startMemoryServer> | undefined;
   if (appConfig.memory.enabled) {
@@ -216,12 +227,16 @@ async function main() {
     botsConfigPath,
     docSync,
     feishuServiceClient,
+    peerManager,
   });
 
   // Graceful shutdown
   const shutdown = () => {
     logger.info('Shutting down...');
     scheduler.destroy();
+    if (peerManager) {
+      peerManager.destroy();
+    }
     apiServer.close();
     if (docSync) {
       docSync.destroy();

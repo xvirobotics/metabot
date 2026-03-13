@@ -58,7 +58,8 @@ We built MetaBot to run [XVI Robotics](https://xvirobotics.com) as an **agent-na
 | **MetaMemory** | Embedded SQLite knowledge store with full-text search and Web UI. Agents read/write Markdown documents across sessions. Shared by all agents. Auto-syncs to Feishu Wiki when changes occur (debounced). |
 | **Feishu Doc Reader** | Read Feishu documents and wiki pages as Markdown. `fd read <url>` from CLI, or Claude auto-reads when users share Feishu URLs. Available as the `feishu-doc` skill. |
 | **IM Bridge** | Chat with any agent from Feishu/Lark or Telegram (including mobile). Streaming cards with color-coded status and tool call tracking. |
-| **Agent Bus** | REST API on port 9100. Agents delegate tasks to each other via `curl`. Create/remove bots at runtime. Exposed as the `/metabot` skill — loaded on demand, not injected into every prompt. |
+| **Agent Bus** | REST API on port 9100. Agents talk to each other via `mb talk`. Create/remove bots at runtime. Exposed as the `/metabot` skill — loaded on demand, not injected into every prompt. |
+| **Peers** | Federation system for cross-instance bot discovery and task routing. Configure `METABOT_PEERS` to connect multiple MetaBot instances — same machine or remote. `mb talk alice/backend-bot` routes automatically. |
 | **Task Scheduler** | One-time delays and recurring cron jobs. `0 8 * * 1-5` = weekday 8am news briefing. Timezone-aware (default: Asia/Shanghai). Persists across restarts, auto-retries when busy. |
 | **CLI Tools** | `metabot`, `mm`, `mb`, and `fd` commands installed to `~/.local/bin/`. `metabot update` to pull/rebuild/restart. `mm` for MetaMemory, `mb` for Agent Bus, `fd` for Feishu docs. |
 
@@ -257,6 +258,9 @@ checks service health, reviews overnight error logs, and posts a summary.
 | `CLAUDE_EXECUTABLE_PATH` | auto-detect | Path to `claude` binary (resolved via `which` if not set) |
 | `METABOT_URL` | `http://localhost:9100` | MetaBot API URL (for CLI remote access) |
 | `META_MEMORY_URL` | `http://localhost:8100` | MetaMemory server URL (for CLI remote access) |
+| `METABOT_PEERS` | — | Comma-separated peer MetaBot URLs for cross-instance discovery |
+| `METABOT_PEER_SECRETS` | — | Comma-separated secrets for each peer (positional match) |
+| `METABOT_PEER_NAMES` | auto | Comma-separated names for each peer |
 | `LOG_LEVEL` | info | Log level |
 
 </details>
@@ -306,11 +310,12 @@ MetaBot runs Claude Code in `bypassPermissions` mode — no interactive approval
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | Health check |
-| `GET` | `/api/bots` | List bots |
+| `GET` | `/api/bots` | List bots (local + peer) |
 | `POST` | `/api/bots` | Create bot at runtime |
 | `GET` | `/api/bots/:name` | Get bot details |
 | `DELETE` | `/api/bots/:name` | Remove bot |
-| `POST` | `/api/tasks` | Delegate task to a bot |
+| `POST` | `/api/talk` | Talk to a bot (auto-routes to peers, supports `peerName/botName`) |
+| `GET` | `/api/peers` | List peers and their status |
 | `POST` | `/api/schedule` | Schedule one-time or recurring (cron) task |
 | `GET` | `/api/schedule` | List scheduled tasks (one-time + recurring) |
 | `PATCH` | `/api/schedule/:id` | Update a scheduled task |
@@ -355,8 +360,10 @@ fd read-id <docId>                  # read document by ID
 fd info <feishu-url>                # get document metadata
 
 # Agent Bus
-mb bots                             # list all bots
-mb task <bot> <chatId> <prompt>     # delegate task
+mb bots                             # list all bots (local + peer)
+mb talk <bot> <chatId> <prompt>     # talk to a bot (auto-routes to peers)
+mb talk alice/bot <chatId> <prompt> # talk to a specific peer's bot
+mb peers                            # list peers and their status
 mb schedule list                    # list scheduled tasks
 mb schedule cron <bot> <chatId> '<cron>' <prompt>  # recurring task
 mb schedule pause <id>              # pause recurring task
