@@ -20,7 +20,25 @@ Peers enables a **federated architecture** where multiple MetaBot instances disc
 
 ## Configuration
 
+Configure peers via **either** method — or use both (they are merged and deduplicated by URL):
+
+=== "Environment Variables (.env)"
+
+    The simplest way — just add to your `.env` file. Works with both single-bot and multi-bot mode.
+
+    ```bash
+    METABOT_PEERS=http://localhost:9200,http://192.168.1.50:9100
+    METABOT_PEER_SECRETS=alice-secret,bob-secret
+    METABOT_PEER_NAMES=alice,bob
+    ```
+
+    - `METABOT_PEERS` — comma-separated peer URLs (required)
+    - `METABOT_PEER_SECRETS` — comma-separated secrets, positional match with URLs (optional, needed if the peer has `API_SECRET` set)
+    - `METABOT_PEER_NAMES` — comma-separated display names (optional, auto-derived from URL if omitted, e.g. `localhost-9200`)
+
 === "bots.json"
+
+    If you already use `bots.json` for multi-bot mode, you can add peers there for a single config file.
 
     ```json
     {
@@ -40,18 +58,12 @@ Peers enables a **federated architecture** where multiple MetaBot instances disc
     }
     ```
 
-=== "Environment Variables"
+    - `name` — display name for the peer (required)
+    - `url` — peer's API URL (required)
+    - `secret` — the peer's `API_SECRET` (optional, needed if the peer has authentication enabled)
 
-    ```bash
-    METABOT_PEERS=http://localhost:9200,http://192.168.1.50:9100
-    METABOT_PEER_SECRETS=alice-secret,bob-secret
-    METABOT_PEER_NAMES=alice,bob
-    METABOT_PEER_POLL_INTERVAL_MS=30000
-    ```
-
-The `secret` field is the peer's `API_SECRET` — needed if the peer has authentication enabled.
-
-Peer names are optional. If not specified, they are auto-derived from the URL (e.g., `localhost-9200`).
+!!! tip "You don't need bots.json"
+    If you're running a single bot, just add `METABOT_PEERS` to your `.env` — no `bots.json` needed. The `bots.json` peers field is only a convenience for multi-bot setups.
 
 ## Qualified Names
 
