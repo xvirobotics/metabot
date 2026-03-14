@@ -241,11 +241,18 @@ export class StreamProcessor {
     switch (message.subtype) {
       case 'task_started':
         if (message.task_id) {
-          this.subagentTasks.set(message.task_id, {
-            taskId: message.task_id,
-            description: message.description || message.prompt || 'Subagent task',
-            status: 'running',
-          });
+          const existing = this.subagentTasks.get(message.task_id);
+          if (existing) {
+            // Merge: update description but preserve any tool calls already captured
+            existing.description = message.description || message.prompt || existing.description;
+          } else {
+            this.subagentTasks.set(message.task_id, {
+              taskId: message.task_id,
+              description: message.description || message.prompt || 'Subagent task',
+              status: 'running',
+              toolCalls: [],
+            });
+          }
         }
         break;
 
@@ -255,6 +262,17 @@ export class StreamProcessor {
           if (task) {
             if (message.summary) task.summary = message.summary;
             if (message.usage) task.usage = message.usage;
+            // last_tool_name is the SDK's way of reporting subagent tool usage
+            if (message.last_tool_name) {
+              if (!task.toolCalls) task.toolCalls = [];
+              const last = task.toolCalls[task.toolCalls.length - 1];
+              // Avoid duplicating consecutive identical tool names
+              if (!last || last.name !== message.last_tool_name || last.status === 'done') {
+                // Mark previous running tool done before adding new one
+                if (last && last.status === 'running') last.status = 'done';
+                task.toolCalls.push({ name: message.last_tool_name, detail: '', status: 'running' });
+              }
+            }
           }
         }
         break;
@@ -266,6 +284,19 @@ export class StreamProcessor {
             task.status = (message.status as SubagentTask['status']) || 'completed';
             if (message.summary) task.summary = message.summary;
             if (message.usage) task.usage = message.usage;
+            if (message.last_tool_name) {
+              if (!task.toolCalls) task.toolCalls = [];
+              const last = task.toolCalls[task.toolCalls.length - 1];
+              if (!last || last.name !== message.last_tool_name) {
+                task.toolCalls.push({ name: message.last_tool_name, detail: '', status: 'done' });
+              }
+            }
+            // Mark all running tools as done when task completes
+            if (task.toolCalls) {
+              for (const t of task.toolCalls) {
+                if (t.status === 'running') t.status = 'done';
+              }
+            }
           }
         }
         break;
