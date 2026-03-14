@@ -1,0 +1,454 @@
+/* ============================================================
+   Layout — Sidebar + Main Content
+   ============================================================ */
+
+.layout {
+  display: flex;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+/* ---- Sidebar ---- */
+
+.sidebar {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  transition: width var(--transition-base), min-width var(--transition-base),
+    transform var(--transition-base);
+  overflow: hidden;
+  z-index: 20;
+}
+
+.sidebarCollapsed {
+  width: 0;
+  min-width: 0;
+  border-right: none;
+}
+
+.sidebarHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 16px 12px;
+  flex-shrink: 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brandIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--accent), #3b82f6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.5px;
+  flex-shrink: 0;
+}
+
+.brandName {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+}
+
+.collapseBtn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.collapseBtn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+/* ---- Navigation ---- */
+
+.nav {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: background var(--transition-fast), color var(--transition-fast);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.navItem:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.navItemActive {
+  background: var(--accent-muted);
+  color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px var(--accent-glow);
+}
+
+.navItemActive:hover {
+  background: var(--accent-glow);
+  color: var(--accent-text);
+}
+
+.navIcon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.navDivider {
+  height: 1px;
+  background: var(--border);
+  margin: 8px 12px;
+}
+
+/* ---- Session List ---- */
+
+.sessionSection {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0 12px;
+}
+
+.sessionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px;
+  flex-shrink: 0;
+}
+
+.sessionTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.newChatBtn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.newChatBtn:hover {
+  background: var(--bg-tertiary);
+  color: var(--accent-text);
+}
+
+.sessionList {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-bottom: 8px;
+}
+
+.sessionItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  group: true;
+  position: relative;
+}
+
+.sessionItem:hover {
+  background: var(--bg-tertiary);
+}
+
+.sessionItemActive {
+  background: var(--bg-tertiary);
+}
+
+.sessionItemText {
+  flex: 1;
+  min-width: 0;
+}
+
+.sessionItemTitle {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sessionItemTime {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.sessionDeleteBtn {
+  opacity: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  transition: opacity var(--transition-fast), color var(--transition-fast),
+    background var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.sessionItem:hover .sessionDeleteBtn {
+  opacity: 1;
+}
+
+.sessionDeleteBtn:hover {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
+.emptySession {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+/* ---- Bot Selector ---- */
+
+.sidebarFooter {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.botSelector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+
+.botSelector:hover {
+  border-color: var(--border-active);
+}
+
+.botDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.botDotOnline {
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(45, 212, 168, 0.4);
+}
+
+.botDotOffline {
+  background: var(--text-tertiary);
+}
+
+.botSelectorName {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.botSelectorPlatform {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.botDropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 12px;
+  right: 12px;
+  margin-bottom: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: fadeInUp 150ms ease-out;
+  z-index: 30;
+}
+
+.botOption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: background var(--transition-fast), color var(--transition-fast);
+  width: 100%;
+  text-align: left;
+}
+
+.botOption:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.botOptionActive {
+  color: var(--accent-text);
+  background: var(--accent-muted);
+}
+
+/* ---- Connection Status ---- */
+
+.connStatus {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.connDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.connDotOn {
+  background: var(--success);
+}
+
+.connDotOff {
+  background: var(--error);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* ---- Main Content ---- */
+
+.main {
+  flex: 1;
+  min-width: 0;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* ---- Mobile Hamburger ---- */
+
+.hamburger {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 25;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.hamburger:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* ---- Mobile Overlay ---- */
+
+.overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  background: rgba(0, 0, 0, 0.5);
+  animation: fadeIn 200ms ease-out;
+}
+
+/* ---- Responsive ---- */
+
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    transform: translateX(-100%);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .sidebar:not(.sidebarCollapsed) {
+    transform: translateX(0);
+  }
+
+  .sidebarCollapsed {
+    transform: translateX(-100%);
+  }
+
+  .hamburger {
+    display: flex;
+  }
+
+  .overlay {
+    display: block;
+  }
+}

@@ -44,6 +44,12 @@ export interface ApiTaskOptions {
   chatId: string;
   userId?: string;
   sendCards?: boolean;
+  /** Override maxTurns for this task (e.g. 1 for voice mode). */
+  maxTurns?: number;
+  /** Called on every card state update (streaming). `final` is true on the last update. */
+  onUpdate?: (state: CardState, messageId: string, final: boolean) => void;
+  /** Called when Claude asks a question. Return the answer JSON string. */
+  onQuestion?: (question: PendingQuestion) => Promise<string>;
 }
 
 export interface ApiTaskResult {
@@ -97,6 +103,13 @@ export class MessageBridge {
 
   isBusy(chatId: string): boolean {
     return this.runningTasks.has(chatId);
+  }
+
+  /** Stop a running task for the given chatId. Returns true if a task was stopped. */
+  stopChatTask(chatId: string): boolean {
+    if (!this.runningTasks.has(chatId)) return false;
+    this.stopTask(chatId);
+    return true;
   }
 
   private stopTask(chatId: string): void {
@@ -581,16 +594,21 @@ export class MessageBridge {
     const processor = new StreamProcessor(displayPrompt);
     const rateLimiter = new RateLimiter(1500);
 
+    const initialState: CardState = {
+      status: 'thinking',
+      userPrompt: displayPrompt,
+      responseText: '',
+      toolCalls: [],
+    };
+
     let messageId: string | undefined;
     if (sendCards) {
-      const initialState: CardState = {
-        status: 'thinking',
-        userPrompt: displayPrompt,
-        responseText: '',
-        toolCalls: [],
-      };
       messageId = await this.sender.sendCard(chatId, initialState);
     }
+
+    // Generate a messageId for onUpdate even if sendCards is false
+    const effectiveMessageId = messageId || `api-${chatId}-${Date.now()}`;
+    options.onUpdate?.(initialState, effectiveMessageId, false);
 
     const apiContext = { botName: this.config.name, chatId };
 
@@ -601,6 +619,7 @@ export class MessageBridge {
       abortController,
       outputsDir,
       apiContext,
+      maxTurns: options.maxTurns,
     });
 
     const startTime = Date.now();
@@ -662,10 +681,21 @@ export class MessageBridge {
 
         if (state.status === 'waiting_for_input' && state.pendingQuestion) {
           const pending = state.pendingQuestion;
-          processor.clearPendingQuestion();
-          const sid = processor.getSessionId() || '';
-          const autoAnswer = JSON.stringify({ answers: { _auto: 'Please decide on your own and proceed.' } });
-          executionHandle.sendAnswer(pending.toolUseId, sid, autoAnswer);
+          if (options.onQuestion) {
+            // Notify the caller about the question state
+            options.onUpdate?.(state, effectiveMessageId, false);
+            // Wait for the caller to provide an answer
+            const answerJson = await options.onQuestion(pending);
+            processor.clearPendingQuestion();
+            const sid = processor.getSessionId() || '';
+            executionHandle.sendAnswer(pending.toolUseId, sid, answerJson);
+          } else {
+            // Auto-answer when no onQuestion handler is provided
+            processor.clearPendingQuestion();
+            const sid = processor.getSessionId() || '';
+            const autoAnswer = JSON.stringify({ answers: { _auto: 'Please decide on your own and proceed.' } });
+            executionHandle.sendAnswer(pending.toolUseId, sid, autoAnswer);
+          }
           continue;
         }
 
@@ -687,6 +717,7 @@ export class MessageBridge {
             this.sender.updateCard(messageId!, state);
           });
         }
+        options.onUpdate?.(state, effectiveMessageId, false);
       }
 
       await rateLimiter.cancelAndWait();
@@ -732,6 +763,7 @@ export class MessageBridge {
           if (sendCards && messageId) {
             rateLimiter.schedule(() => { this.sender.updateCard(messageId!, state); });
           }
+          options.onUpdate?.(state, effectiveMessageId, false);
         }
         await rateLimiter.cancelAndWait();
       }
@@ -739,6 +771,7 @@ export class MessageBridge {
       if (sendCards && messageId) {
         await this.sendFinalCard(messageId, lastState, chatId);
       }
+      options.onUpdate?.(lastState, effectiveMessageId, true);
 
       await this.outputHandler.sendOutputFiles(chatId, outputsDir, processor, lastState);
 
@@ -790,12 +823,14 @@ export class MessageBridge {
             if (sendCards && messageId) {
               rateLimiter.schedule(() => { this.sender.updateCard(messageId!, state); });
             }
+            options.onUpdate?.(state, effectiveMessageId, false);
           }
           await rateLimiter.cancelAndWait();
 
           if (sendCards && messageId) {
             await this.sendFinalCard(messageId, lastState, chatId);
           }
+          options.onUpdate?.(lastState, effectiveMessageId, true);
 
           await this.outputHandler.sendOutputFiles(chatId, outputsDir, processor, lastState);
 
@@ -824,6 +859,15 @@ export class MessageBridge {
         await rateLimiter.cancelAndWait();
         await this.sendFinalCard(messageId, errorState, chatId);
       }
+
+      const catchErrorState: CardState = {
+        status: 'error',
+        userPrompt: displayPrompt,
+        responseText: lastState.responseText,
+        toolCalls: lastState.toolCalls,
+        errorMessage: err.message || 'Unknown error',
+      };
+      options.onUpdate?.(catchErrorState, effectiveMessageId, true);
 
       return {
         success: false,

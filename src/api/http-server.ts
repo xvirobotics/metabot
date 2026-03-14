@@ -11,6 +11,7 @@ import { metrics } from '../utils/metrics.js';
 import { FeishuDocReader } from '../feishu/doc-reader.js';
 import type { PeerManager } from './peer-manager.js';
 import { handleVoiceRequest } from './voice-handler.js';
+import { setupWebSocketServer, serveStaticFiles } from '../web/ws-server.js';
 
 interface ApiServerOptions {
   port: number;
@@ -22,6 +23,8 @@ interface ApiServerOptions {
   docSync?: DocSync;
   feishuServiceClient?: lark.Client;
   peerManager?: PeerManager;
+  memoryServerUrl?: string;
+  memoryAuthToken?: string;
 }
 
 interface JsonBody {
@@ -71,15 +74,15 @@ async function parseJsonBody(req: http.IncomingMessage): Promise<JsonBody> {
 }
 
 export function startApiServer(options: ApiServerOptions): http.Server {
-  const { port, secret, registry, scheduler, logger, botsConfigPath, docSync, feishuServiceClient, peerManager } = options;
+  const { port, secret, registry, scheduler, logger, botsConfigPath, docSync, feishuServiceClient, peerManager, memoryServerUrl, memoryAuthToken } = options;
   const host = secret ? '0.0.0.0' : '127.0.0.1';
 
   const server = http.createServer(async (req, res) => {
     const method = req.method || 'GET';
     const url = req.url || '/';
 
-    // Auth check if secret is configured
-    if (secret) {
+    // Auth check if secret is configured (exempt /web/ static files and /memory/ proxy — WS auth is handled via ?token=)
+    if (secret && !url.startsWith('/web') && !url.startsWith('/memory')) {
       const auth = req.headers.authorization;
       if (auth !== `Bearer ${secret}`) {
         jsonResponse(res, 401, { error: 'Unauthorized' });
@@ -708,6 +711,44 @@ export function startApiServer(options: ApiServerOptions): http.Server {
         return;
       }
 
+      // Proxy /memory/* to MetaMemory server
+      if (url.startsWith('/memory/') || url === '/memory') {
+        const memoryUrl = memoryServerUrl || process.env.META_MEMORY_URL || 'http://localhost:8100';
+        const targetPath = url.slice('/memory'.length) || '/';
+        const targetUrl = `${memoryUrl}${targetPath}`;
+
+        try {
+          const headers: Record<string, string> = {};
+          if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
+          if (memoryAuthToken) headers['Authorization'] = `Bearer ${memoryAuthToken}`;
+
+          let body: string | undefined;
+          if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+            body = await readBody(req);
+          }
+
+          const proxyRes = await fetch(targetUrl, {
+            method,
+            headers,
+            body,
+          });
+
+          const contentType = proxyRes.headers.get('content-type') || 'application/json';
+          const responseBody = await proxyRes.text();
+          res.writeHead(proxyRes.status, { 'Content-Type': contentType });
+          res.end(responseBody);
+        } catch (err: any) {
+          logger.warn({ err, targetUrl }, 'MetaMemory proxy error');
+          jsonResponse(res, 502, { error: `MetaMemory proxy error: ${err.message}` });
+        }
+        return;
+      }
+
+      // Static file serving for Web UI
+      if (serveStaticFiles(req, res, url)) {
+        return;
+      }
+
       // 404 fallback
       jsonResponse(res, 404, { error: 'Not found' });
     } catch (err: any) {
@@ -718,6 +759,9 @@ export function startApiServer(options: ApiServerOptions): http.Server {
       jsonResponse(res, statusCode, { error: err.message || 'Internal server error' });
     }
   });
+
+  // Set up WebSocket server for Web UI streaming
+  setupWebSocketServer(server, registry, logger, secret, peerManager);
 
   server.listen(port, host, () => {
     logger.info({ host, port }, 'API server started');

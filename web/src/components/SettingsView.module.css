@@ -1,0 +1,292 @@
+/* ============================================================
+   SettingsView
+   ============================================================ */
+
+.container {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 40px 24px;
+  height: 100%;
+  overflow-y: auto;
+  animation: fadeInUp 300ms ease-out;
+}
+
+.header {
+  margin-bottom: 36px;
+}
+
+.title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+  margin-bottom: 4px;
+}
+
+.subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+/* ---- Sections ---- */
+
+.section {
+  margin-bottom: 32px;
+}
+
+.sectionTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ---- Cards ---- */
+
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.cardItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.cardItem:last-child {
+  border-bottom: none;
+}
+
+.cardItemLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cardItemLabel {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.cardItemDesc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* Toggle switch */
+.toggle {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform var(--transition-fast), background var(--transition-fast);
+}
+
+.toggleOn {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.toggleOn::after {
+  transform: translateX(20px);
+  background: #fff;
+}
+
+/* Token display */
+.tokenDisplay {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tokenValue {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Buttons */
+.btn {
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background var(--transition-fast), color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+}
+
+.btn:active {
+  transform: translateY(0);
+}
+
+.btnPrimary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btnPrimary:hover {
+  background: var(--accent-hover);
+}
+
+.btnDanger {
+  background: var(--error-bg);
+  color: var(--error);
+  border: 1px solid rgba(239, 91, 91, 0.15);
+}
+
+.btnDanger:hover {
+  background: rgba(239, 91, 91, 0.15);
+}
+
+.btnOutline {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.btnOutline:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: var(--border-active);
+}
+
+/* Bot list */
+.botList {
+  display: flex;
+  flex-direction: column;
+}
+
+.botItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.botItem:last-child {
+  border-bottom: none;
+}
+
+.botDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.botDotOnline {
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(45, 212, 168, 0.4);
+}
+
+.botDotOffline {
+  background: var(--text-tertiary);
+}
+
+.botInfo {
+  flex: 1;
+}
+
+.botName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.botMeta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+/* Connection status */
+.connBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.connBadgeOnline {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.connBadgeOffline {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.connDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.connDotOn {
+  background: var(--success);
+}
+
+.connDotOff {
+  background: var(--error);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* Version info */
+.version {
+  text-align: center;
+  margin-top: 48px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.version a {
+  color: var(--accent-text);
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 24px 16px;
+  }
+}
