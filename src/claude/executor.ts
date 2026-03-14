@@ -77,6 +77,7 @@ export type SDKMessage = {
     content?: Array<{
       type: string;
       text?: string;
+      thinking?: string;
       name?: string;
       id?: string;
       input?: unknown;
@@ -97,6 +98,7 @@ export type SDKMessage = {
     delta?: {
       type: string;
       text?: string;
+      thinking?: string;
     };
     content_block?: {
       type: string;

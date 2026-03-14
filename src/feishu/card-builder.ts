@@ -39,6 +39,27 @@ export function buildCard(state: CardState): string {
     elements.push({ tag: 'hr' });
   }
 
+  // Thinking content (collapsible)
+  if (state.thinkingText) {
+    elements.push({
+      tag: 'collapsible_panel',
+      expanded: false,
+      header: {
+        title: {
+          tag: 'plain_text',
+          content: '💭 Thinking',
+        },
+      },
+      border: { color: 'grey' },
+      body: [
+        {
+          tag: 'markdown',
+          content: truncateContent(state.thinkingText),
+        },
+      ],
+    });
+  }
+
   // Response content
   if (state.responseText) {
     elements.push({

@@ -47,6 +47,14 @@ function renderCardHtml(state: CardState): string {
     parts.push('---');
   }
 
+  // Thinking content
+  if (state.thinkingText) {
+    const truncated = state.thinkingText.length > 500
+      ? state.thinkingText.slice(0, 500) + '...'
+      : state.thinkingText;
+    parts.push(`<blockquote expandable>💭 <b>Thinking</b>\n${escapeHtml(truncated)}</blockquote>`);
+  }
+
   // Response text
   if (state.responseText) {
     parts.push(markdownToTelegramHtml(state.responseText));

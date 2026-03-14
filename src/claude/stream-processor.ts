@@ -27,6 +27,7 @@ export interface StreamProcessorConfig {
 
 export class StreamProcessor {
   private responseText = '';
+  private thinkingText = '';
   private toolCalls: ToolCall[] = [];
   private currentToolName: string | null = null;
   private sessionId: string | undefined;
@@ -85,6 +86,7 @@ export class StreamProcessor {
       status,
       userPrompt: this.userPrompt,
       responseText: this.responseText,
+      thinkingText: this.thinkingText || undefined,
       toolCalls: [...this.toolCalls],
       costUsd: this.costUsd,
       durationMs: this.durationMs,
@@ -102,7 +104,11 @@ export class StreamProcessor {
     if (!message.message?.content) return;
 
     for (const block of message.message.content) {
-      if (block.type === 'text' && block.text) {
+      if (block.type === 'thinking' && block.thinking) {
+        if (message.parent_tool_use_id === null || message.parent_tool_use_id === undefined) {
+          this.thinkingText = block.thinking;
+        }
+      } else if (block.type === 'text' && block.text) {
         // Only accumulate text from top-level assistant messages (not subagent)
         if (message.parent_tool_use_id === null || message.parent_tool_use_id === undefined) {
           // Full message text replaces accumulated stream text
@@ -143,7 +149,9 @@ export class StreamProcessor {
       }
     } else if (event.type === 'content_block_delta') {
       const delta = event.delta;
-      if (delta?.type === 'text_delta' && delta.text) {
+      if (delta?.type === 'thinking_delta' && delta.thinking) {
+        this.thinkingText += delta.thinking;
+      } else if (delta?.type === 'text_delta' && delta.text) {
         this.responseText += delta.text;
       }
     } else if (event.type === 'content_block_stop') {
@@ -170,6 +178,7 @@ export class StreamProcessor {
       status: isError ? 'error' : 'complete',
       userPrompt: this.userPrompt,
       responseText: message.result || this.responseText,
+      thinkingText: this.thinkingText || undefined,
       toolCalls: [...this.toolCalls],
       costUsd: this.costUsd,
       durationMs: this.durationMs,

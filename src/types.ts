@@ -22,6 +22,7 @@ export interface CardState {
   status: CardStatus;
   userPrompt: string;
   responseText: string;
+  thinkingText?: string;
   toolCalls: ToolCall[];
   costUsd?: number;
   durationMs?: number;
