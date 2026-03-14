@@ -79,6 +79,8 @@
 
 > **注意**：URL 字段填固定地址（包含查询参数），「录制的音频」作为文件请求体发送。
 
+> **自定义音色**：在 URL 末尾加 `&ttsVoice=音色ID` 可切换豆包 TTS 音色（默认：`zh_female_sajiaonvyou_moon_bigtts`）。可用音色见[火山引擎 TTS 控制台](https://console.volcengine.com/speech/service/8)。
+
 ### 第 4 步：添加「设定变量」
 
 搜索添加 **设定变量** 动作：
