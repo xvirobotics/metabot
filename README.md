@@ -120,6 +120,7 @@ Prerequisites: Node.js 20+, [Claude Code CLI](https://github.com/anthropics/clau
 - **Multi-agent team** — frontend bot, backend bot, infra bot, each in their own workspace, talking via the Agent Bus
 - **Self-growing organization** — a manager bot that creates new agents on demand, assigns tasks, schedules follow-ups
 - **Autonomous research pipeline** — agents that search, analyze, save findings to MetaMemory, and schedule next steps
+- **Voice assistant (Jarvis mode)** — "Hey Siri, Jarvis" from AirPods, hands-free voice control of any agent via iOS Shortcuts. See [Voice Setup Guide](docs/features/voice-jarvis.md)
 
 ## Example Prompts
 
