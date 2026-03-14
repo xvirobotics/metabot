@@ -228,6 +228,8 @@ async function main() {
     docSync,
     feishuServiceClient,
     peerManager,
+    memoryServerUrl: appConfig.memoryServerUrl,
+    memoryAuthToken: appConfig.memory.adminToken || appConfig.memory.readerToken || appConfig.memory.secret || undefined,
   });
 
   // Graceful shutdown

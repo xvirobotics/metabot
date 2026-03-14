@@ -1,0 +1,333 @@
+/* ============================================================
+   VoiceView — Jarvis Mode
+   ============================================================ */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 48px 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Background aura effect */
+.aura {
+  position: absolute;
+  width: 400px;
+  height: 400px;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: 0;
+  transition: opacity 600ms ease;
+  pointer-events: none;
+}
+
+.auraActive {
+  opacity: 0.3;
+  animation: breathe 3s ease-in-out infinite;
+}
+
+.auraRecording {
+  background: var(--error);
+}
+
+.auraProcessing {
+  background: var(--accent);
+}
+
+.auraPlaying {
+  background: var(--success);
+}
+
+/* Status text */
+.statusText {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 40px;
+  min-height: 20px;
+  transition: color var(--transition-base);
+}
+
+.statusRecording {
+  color: var(--error);
+}
+
+.statusProcessing {
+  color: var(--accent);
+}
+
+.statusPlaying {
+  color: var(--success);
+}
+
+/* Mic button */
+.micContainer {
+  position: relative;
+  margin-bottom: 48px;
+}
+
+.micRings {
+  position: absolute;
+  inset: -20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  transition: border-color var(--transition-base);
+}
+
+.micRingsActive {
+  border-color: rgba(239, 91, 91, 0.2);
+  animation: pulseGlow 1.5s ease-in-out infinite;
+}
+
+.micRingsOuter {
+  position: absolute;
+  inset: -40px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  transition: border-color var(--transition-base);
+}
+
+.micRingsOuterActive {
+  border-color: rgba(239, 91, 91, 0.1);
+  animation: pulseGlow 1.5s ease-in-out 0.3s infinite;
+}
+
+.micBtn {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition-base), border-color var(--transition-base),
+    transform var(--transition-spring), box-shadow var(--transition-base);
+  position: relative;
+  z-index: 1;
+}
+
+.micBtn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  border-color: var(--border-active);
+  transform: scale(1.05);
+}
+
+.micBtn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.micBtnRecording {
+  background: var(--error-bg);
+  border-color: var(--error);
+  box-shadow: 0 0 30px rgba(239, 91, 91, 0.2);
+}
+
+.micBtnRecording:hover {
+  background: var(--error-bg) !important;
+}
+
+.micBtnProcessing {
+  border-color: var(--accent);
+  animation: pulseGlow 2s ease-in-out infinite;
+}
+
+.micBtnDisabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.micIcon {
+  color: var(--text-secondary);
+  transition: color var(--transition-base);
+}
+
+.micIconRecording {
+  color: var(--error);
+}
+
+.micIconProcessing {
+  color: var(--accent);
+}
+
+/* Waveform visualization */
+.waveform {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 40px;
+  margin-bottom: 32px;
+  min-width: 200px;
+}
+
+.waveBar {
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: height 100ms ease;
+  min-height: 4px;
+}
+
+.waveBarRecording {
+  background: var(--error);
+}
+
+/* Transcript */
+.transcript {
+  width: 100%;
+  max-width: 600px;
+  min-height: 60px;
+  margin-bottom: 24px;
+}
+
+.transcriptLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 8px;
+}
+
+.transcriptText {
+  font-size: 15px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  text-align: center;
+  padding: 16px 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  min-height: 56px;
+}
+
+.transcriptEmpty {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+/* Response section */
+.response {
+  width: 100%;
+  max-width: 600px;
+}
+
+.responseLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 8px;
+}
+
+.responseText {
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  padding: 16px 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Audio player */
+.audioPlayer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.playBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
+  transition: background var(--transition-fast), transform var(--transition-fast);
+}
+
+.playBtn:hover {
+  background: var(--accent-hover);
+  transform: scale(1.05);
+}
+
+.audioLabel {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Config section */
+.config {
+  display: flex;
+  gap: 12px;
+  margin-top: 32px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.configItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.configSelect {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.configSelect option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+/* Instructions */
+.instructions {
+  margin-top: 32px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 400px;
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 32px 16px;
+  }
+
+  .micBtn {
+    width: 80px;
+    height: 80px;
+  }
+}

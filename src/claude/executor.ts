@@ -65,6 +65,8 @@ export interface ExecutorOptions {
   abortController: AbortController;
   outputsDir?: string;
   apiContext?: ApiContext;
+  /** Override maxTurns for this execution. */
+  maxTurns?: number;
 }
 
 export type SDKMessage = {
@@ -199,6 +201,9 @@ export class ClaudeExecutor {
     inputQueue.enqueue(initialMessage);
 
     const queryOptions = this.buildQueryOptions(cwd, sessionId, abortController, outputsDir, apiContext);
+    if (options.maxTurns !== undefined) {
+      queryOptions.maxTurns = options.maxTurns;
+    }
 
     const stream = query({
       prompt: inputQueue,

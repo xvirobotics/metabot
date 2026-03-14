@@ -273,7 +273,7 @@ function resolveTTSProvider(explicit: string): string {
 function resolveTTSVoice(explicit: string, ttsProvider: string): string {
   if (explicit) return explicit;
   // Sensible defaults per provider
-  if (ttsProvider === 'doubao') return 'zh_female_wanqudashu_moon_bigtts';
+  if (ttsProvider === 'doubao') return 'zh_female_sajiaonvyou_moon_bigtts';
   if (ttsProvider === 'elevenlabs') return 'EXAVITQu4vr4xnSDxMaL'; // Bella
   return 'alloy'; // OpenAI
 }
@@ -334,16 +334,25 @@ export async function handleVoiceRequest(
   }
   logger.info({ botName, chatId, transcript, sttProvider }, 'Voice transcript');
 
-  // Step 2: Agent execution
+  const voiceMode = params.get('voiceMode') === 'true';
+
+  // In voice mode, prepend instruction for brief conversational reply
+  const agentPrompt = voiceMode
+    ? `[Voice mode — respond in 1-2 concise spoken sentences. Be conversational and brief. Do NOT use any tools. Do NOT use markdown formatting. Respond in the same language the user speaks.]\n\n${transcript}`
+    : transcript;
+
+  // Step 2: Agent execution (voice mode uses maxTurns=1 for speed)
   const talkResult = await bot.bridge.executeApiTask({
-    prompt: transcript,
+    prompt: agentPrompt,
     chatId,
     userId: 'voice',
     sendCards,
+    ...(voiceMode ? { maxTurns: 1 } : {}),
   });
 
   const responseText = talkResult.responseText || '';
-  logger.info({ botName, chatId, responseLength: responseText.length, costUsd: talkResult.costUsd }, 'Voice response ready');
+  const costUsd = talkResult.costUsd || 0;
+  logger.info({ botName, chatId, voiceMode, responseLength: responseText.length, costUsd }, 'Voice response ready');
 
   // Step 3: Optional TTS
   if (ttsProvider && responseText) {
@@ -370,7 +379,7 @@ export async function handleVoiceRequest(
         'Content-Length': audioOut.length.toString(),
         'X-Transcript': Buffer.from(transcript).toString('base64'),
         'X-Response-Text': Buffer.from(responseText.slice(0, 2000)).toString('base64'),
-        'X-Cost-Usd': (talkResult.costUsd || 0).toString(),
+        'X-Cost-Usd': costUsd.toString(),
       });
       res.end(audioOut);
       return;
@@ -382,11 +391,10 @@ export async function handleVoiceRequest(
 
   // Return JSON (no TTS or TTS failed)
   jsonResponse(res, 200, {
-    success: talkResult.success,
+    success: true,
     transcript,
     responseText,
-    costUsd: talkResult.costUsd,
-    durationMs: talkResult.durationMs,
+    costUsd,
   });
 }
 
