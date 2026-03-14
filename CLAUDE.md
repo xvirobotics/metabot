@@ -99,19 +99,11 @@ Read Feishu documents (standalone docx and wiki pages) and convert them to Markd
 
 ### Voice API (Jarvis Mode)
 
-`POST /api/voice` — Server-side STT + Agent execution + optional TTS. Accepts raw audio body (m4a, wav, webm, mp3, ogg — max 100 MB). Config via query params: `botName`, `chatId`, `language`, `stt` (doubao/whisper), `tts` (doubao/openai/elevenlabs), `ttsVoice`, `sendCards`. Defaults to Doubao for both STT and TTS when Volcengine keys are configured.
+`POST /api/voice` — Server-side Whisper STT + Agent execution + optional TTS. Accepts raw audio body (m4a, wav, webm, mp3, ogg — max 25 MB). Config via query params: `botName`, `chatId`, `language`, `tts` (openai/elevenlabs), `ttsVoice`, `sendCards`.
 
-**Key module:** `src/api/voice-handler.ts` — Doubao/Whisper transcription, agent execution via `bridge.executeApiTask()`, Doubao/OpenAI/ElevenLabs TTS.
+**Key module:** `src/api/voice-handler.ts` — Whisper transcription, agent execution via `bridge.executeApiTask()`, OpenAI/ElevenLabs TTS.
 
-**Environment:** `VOLCENGINE_TTS_APPID` + `VOLCENGINE_TTS_ACCESS_KEY` (for Doubao STT + TTS, recommended), `OPENAI_API_KEY` (fallback for Whisper STT + OpenAI TTS), `ELEVENLABS_API_KEY` (optional for ElevenLabs TTS).
-
-### Text-to-Speech API
-
-`POST /api/tts` — Lightweight TTS-only endpoint (no STT, no agent). Accepts JSON `{ text, provider?, voice? }`, returns `audio/mpeg` binary with metadata headers (`X-Text-Length`, `X-Provider`, `X-Voice`). Reuses TTS functions from `voice-handler.ts`.
-
-**CLI:** `mb voice "text" [--play] [-o file.mp3] [--provider doubao|openai|elevenlabs] [--voice <id>]`
-
-**Skill:** `voice` — Global skill teaching Claude agents to use `mb voice` for audio output. Installed to `~/.claude/skills/voice/SKILL.md`.
+**Environment:** `OPENAI_API_KEY` (required for Whisper STT + OpenAI TTS), `ELEVENLABS_API_KEY` (optional for ElevenLabs TTS).
 
 ### Plan Mode Display
 

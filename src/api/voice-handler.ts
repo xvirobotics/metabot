@@ -1,17 +1,14 @@
 /**
- * Voice handler — STT + Agent + optional TTS.
+ * Voice handler — Whisper STT + optional TTS (OpenAI / ElevenLabs).
  *
- * POST /api/voice?botName=xxx&chatId=xxx[&stt=doubao|whisper&tts=doubao|openai|elevenlabs&ttsVoice=...&language=zh]
- * Body: raw audio bytes (m4a, wav, webm, mp3, ogg, etc.)  — max 100 MB
+ * POST /api/voice?botName=xxx&chatId=xxx[&tts=openai|elevenlabs&ttsVoice=alloy&language=zh]
+ * Body: raw audio bytes (m4a, wav, webm, mp3, etc.)
  * Authorization: Bearer <secret>
- *
- * Defaults: stt=doubao, tts=doubao when Volcengine keys are set; falls back to whisper/none otherwise.
  *
  * Response (no tts): JSON { transcript, responseText, success, costUsd, durationMs }
  * Response (tts):    audio/mpeg body, with X-Transcript and X-Response-Text headers (base64).
  */
 
-import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -19,7 +16,7 @@ import * as http from 'node:http';
 import type { Logger } from '../utils/logger.js';
 import type { BotRegistry } from './bot-registry.js';
 
-const MAX_AUDIO_SIZE = 100 * 1024 * 1024; // 100 MB (Doubao flash limit)
+const MAX_AUDIO_SIZE = 25 * 1024 * 1024; // 25 MB (Whisper limit)
 
 // ---------------------------------------------------------------------------
 // Read raw audio body
@@ -33,7 +30,7 @@ function readRawBody(req: http.IncomingMessage): Promise<Buffer> {
       totalSize += chunk.length;
       if (totalSize > MAX_AUDIO_SIZE) {
         req.destroy();
-        reject(Object.assign(new Error('Audio too large (max 100 MB)'), { statusCode: 413 }));
+        reject(Object.assign(new Error('Audio too large (max 25 MB)'), { statusCode: 413 }));
         return;
       }
       chunks.push(chunk);
@@ -62,56 +59,6 @@ function detectAudioExt(contentType: string | undefined, buf: Buffer): string {
     if (buf.length >= 8 && buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70) return 'm4a';
   }
   return 'm4a'; // default
-}
-
-// Map extension to format name for Doubao STT
-function extToFormat(ext: string): string {
-  const map: Record<string, string> = { m4a: 'mp4', wav: 'wav', mp3: 'mp3', ogg: 'ogg_opus', webm: 'webm' };
-  return map[ext] || ext;
-}
-
-// ---------------------------------------------------------------------------
-// Doubao (Volcengine) STT — Flash Recognition (synchronous)
-// ---------------------------------------------------------------------------
-
-async function doubaoTranscribe(audioBuffer: Buffer, ext: string, logger: Logger): Promise<string> {
-  const appKey = process.env.VOLCENGINE_TTS_APPID;
-  const accessKey = process.env.VOLCENGINE_TTS_ACCESS_KEY;
-  if (!appKey || !accessKey) {
-    throw Object.assign(new Error('VOLCENGINE_TTS_APPID and VOLCENGINE_TTS_ACCESS_KEY not configured'), { statusCode: 500 });
-  }
-
-  const requestId = crypto.randomUUID();
-  const url = 'https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash';
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Api-App-Key': appKey,
-      'X-Api-Access-Key': accessKey,
-      'X-Api-Resource-Id': 'volc.bigasr.auc_turbo',
-      'X-Api-Request-Id': requestId,
-      'X-Api-Sequence': '-1',
-    },
-    body: JSON.stringify({
-      user: { uid: appKey },
-      audio: {
-        data: audioBuffer.toString('base64'),
-        format: extToFormat(ext),
-      },
-      request: { model_name: 'bigmodel' },
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Doubao STT failed: ${response.status} ${err}`);
-  }
-
-  const result = await response.json() as any;
-  const text = result?.result?.text || '';
-  logger.info({ textLength: text.length, requestId }, 'Doubao STT transcription complete');
-  return text;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +91,7 @@ async function whisperTranscribe(audioBuffer: Buffer, ext: string, language: str
 // OpenAI TTS
 // ---------------------------------------------------------------------------
 
-export async function openaiTTS(text: string, voice: string): Promise<Buffer> {
+async function openaiTTS(text: string, voice: string): Promise<Buffer> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw Object.assign(new Error('OPENAI_API_KEY not configured'), { statusCode: 500 });
 
@@ -162,7 +109,7 @@ export async function openaiTTS(text: string, voice: string): Promise<Buffer> {
 // ElevenLabs TTS
 // ---------------------------------------------------------------------------
 
-export async function elevenlabsTTS(text: string, voiceId: string): Promise<Buffer> {
+async function elevenlabsTTS(text: string, voiceId: string): Promise<Buffer> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) throw Object.assign(new Error('ELEVENLABS_API_KEY not configured'), { statusCode: 500 });
 
@@ -188,97 +135,6 @@ export async function elevenlabsTTS(text: string, voiceId: string): Promise<Buff
 }
 
 // ---------------------------------------------------------------------------
-// Doubao (Volcengine) TTS — V3 HTTP Chunked API
-// ---------------------------------------------------------------------------
-
-export async function doubaoTTS(text: string, speaker: string): Promise<Buffer> {
-  const appId = process.env.VOLCENGINE_TTS_APPID;
-  const accessKey = process.env.VOLCENGINE_TTS_ACCESS_KEY;
-  const resourceId = process.env.VOLCENGINE_TTS_RESOURCE_ID || 'volc.service_type.10029';
-  if (!appId || !accessKey) {
-    throw Object.assign(new Error('VOLCENGINE_TTS_APPID and VOLCENGINE_TTS_ACCESS_KEY not configured'), { statusCode: 500 });
-  }
-
-  const url = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Api-App-Id': appId,
-      'X-Api-Access-Key': accessKey,
-      'X-Api-Resource-Id': resourceId,
-      'X-Api-Request-Id': crypto.randomUUID(),
-    },
-    body: JSON.stringify({
-      req_params: {
-        text,
-        speaker,
-        audio_params: {
-          format: 'mp3',
-          sample_rate: 24000,
-        },
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Doubao TTS failed: ${response.status} ${err}`);
-  }
-
-  // V3 HTTP Chunked returns multiple JSON chunks, each with base64 audio in "data" field
-  const body = await response.text();
-  const audioChunks: Buffer[] = [];
-  for (const line of body.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const chunk = JSON.parse(trimmed);
-      if (chunk.data) {
-        audioChunks.push(Buffer.from(chunk.data, 'base64'));
-      }
-      if (chunk.code && chunk.code !== 0 && chunk.code !== 20000000) {
-        throw new Error(`Doubao TTS error: code=${chunk.code} message=${chunk.message}`);
-      }
-    } catch (e: any) {
-      if (e.message?.startsWith('Doubao TTS error')) throw e;
-      // Skip non-JSON lines
-    }
-  }
-
-  if (audioChunks.length === 0) {
-    throw new Error('Doubao TTS returned no audio data');
-  }
-  return Buffer.concat(audioChunks);
-}
-
-// ---------------------------------------------------------------------------
-// Resolve defaults: prefer Doubao when keys are configured, fall back to OpenAI
-// ---------------------------------------------------------------------------
-
-function resolveSTTProvider(explicit: string): string {
-  if (explicit) return explicit;
-  // Default to doubao if Volcengine keys exist, otherwise whisper
-  if (process.env.VOLCENGINE_TTS_APPID && process.env.VOLCENGINE_TTS_ACCESS_KEY) return 'doubao';
-  return 'whisper';
-}
-
-export function resolveTTSProvider(explicit: string): string {
-  if (explicit) return explicit;
-  // Default to doubao if Volcengine keys exist, otherwise none (no TTS)
-  if (process.env.VOLCENGINE_TTS_APPID && process.env.VOLCENGINE_TTS_ACCESS_KEY) return 'doubao';
-  return '';
-}
-
-export function resolveTTSVoice(explicit: string, ttsProvider: string): string {
-  if (explicit) return explicit;
-  // Sensible defaults per provider
-  if (ttsProvider === 'doubao') return 'zh_female_wanqudashu_moon_bigtts';
-  if (ttsProvider === 'elevenlabs') return 'EXAVITQu4vr4xnSDxMaL'; // Bella
-  return 'alloy'; // OpenAI
-}
-
-// ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
 
@@ -294,9 +150,8 @@ export async function handleVoiceRequest(
   const botName = params.get('botName') || params.get('bot') || '';
   const chatId = params.get('chatId') || params.get('chat') || 'voice_default';
   const language = params.get('language') || params.get('lang') || 'zh';
-  const sttProvider = resolveSTTProvider(params.get('stt') || '');
-  const ttsProvider = resolveTTSProvider(params.get('tts') || '');
-  const ttsVoice = resolveTTSVoice(params.get('ttsVoice') || params.get('voice') || '', ttsProvider);
+  const ttsProvider = params.get('tts') || ''; // openai, elevenlabs, or empty
+  const ttsVoice = params.get('ttsVoice') || params.get('voice') || 'alloy';
   const sendCards = params.get('sendCards') === 'true';
 
   if (!botName) {
@@ -318,23 +173,17 @@ export async function handleVoiceRequest(
   }
 
   const ext = detectAudioExt(req.headers['content-type'], audioBuffer);
-  logger.info({ botName, chatId, audioSize: audioBuffer.length, ext, sttProvider, ttsProvider }, 'Voice request received');
+  logger.info({ botName, chatId, audioSize: audioBuffer.length, ext, ttsProvider }, 'Voice request received');
 
-  // Step 1: STT
-  let transcript: string;
-  if (sttProvider === 'whisper') {
-    transcript = await whisperTranscribe(audioBuffer, ext, language, logger);
-  } else {
-    transcript = await doubaoTranscribe(audioBuffer, ext, logger);
-  }
-
+  // Step 1: Whisper STT
+  const transcript = await whisperTranscribe(audioBuffer, ext, language, logger);
   if (!transcript.trim()) {
     jsonResponse(res, 200, { success: true, transcript: '', responseText: '', error: 'No speech detected' });
     return;
   }
-  logger.info({ botName, chatId, transcript, sttProvider }, 'Voice transcript');
+  logger.info({ botName, chatId, transcript }, 'Voice transcript');
 
-  // Step 2: Agent execution
+  // Step 2: Agent execution via /api/talk logic
   const talkResult = await bot.bridge.executeApiTask({
     prompt: transcript,
     chatId,
@@ -348,18 +197,14 @@ export async function handleVoiceRequest(
   // Step 3: Optional TTS
   if (ttsProvider && responseText) {
     try {
-      // Truncate very long responses for TTS
-      // Doubao V3 limit: 1024 bytes (~300 Chinese chars); OpenAI/ElevenLabs: ~4000 chars
-      const maxChars = ttsProvider === 'doubao' ? 300 : 4000;
-      const ttsText = responseText.length > maxChars
-        ? responseText.slice(0, maxChars - 10) + '... 内容过长，已截断。'
+      // Truncate very long responses for TTS (max ~4000 chars)
+      const ttsText = responseText.length > 4000
+        ? responseText.slice(0, 3900) + '... 内容过长，已截断。'
         : responseText;
 
       let audioOut: Buffer;
       if (ttsProvider === 'elevenlabs') {
         audioOut = await elevenlabsTTS(ttsText, ttsVoice);
-      } else if (ttsProvider === 'doubao') {
-        audioOut = await doubaoTTS(ttsText, ttsVoice);
       } else {
         audioOut = await openaiTTS(ttsText, ttsVoice);
       }
