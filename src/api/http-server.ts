@@ -10,6 +10,7 @@ import { installSkillsToWorkDir } from './skills-installer.js';
 import { metrics } from '../utils/metrics.js';
 import { FeishuDocReader } from '../feishu/doc-reader.js';
 import type { PeerManager } from './peer-manager.js';
+import { handleVoiceRequest } from './voice-handler.js';
 
 interface ApiServerOptions {
   port: number;
@@ -87,6 +88,13 @@ export function startApiServer(options: ApiServerOptions): http.Server {
     }
 
     try {
+      // Route: POST /api/voice (Whisper STT + Agent + optional TTS)
+      // Must be before other routes because it reads raw audio body, not JSON.
+      if (method === 'POST' && (url === '/api/voice' || url.startsWith('/api/voice?'))) {
+        await handleVoiceRequest(req, res, registry, logger);
+        return;
+      }
+
       // Route: GET /api/health
       if (method === 'GET' && url === '/api/health') {
         const peerStatuses = peerManager?.getPeerStatuses() ?? [];

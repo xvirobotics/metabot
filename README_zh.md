@@ -120,7 +120,7 @@ npm run dev
 - **多 Agent 团队** — 前端 Bot、后端 Bot、运维 Bot，各自独立工作空间，通过 Agent 总线协作
 - **自生长的组织** — 管理者 Bot 按需创建新 Agent，分配任务，安排后续跟进
 - **自主研究流水线** — Agent 搜索、分析、将发现存入 MetaMemory、安排下一步
-- **语音助手（Jarvis 模式）** — AirPods 说 "Hey Siri, Jarvis"，免手免屏语音控制任意 Agent。见 [语音设置指南](docs/features/voice-jarvis.zh.md)
+- **语音助手（Jarvis 模式）** — AirPods 说 "Hey Siri, Jarvis"，免手免屏语音控制任意 Agent。服务端 Whisper STT 高质量语音识别。见 [语音设置指南](docs/features/voice-jarvis.zh.md)
 
 ## 示例 Prompt
 

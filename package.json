@@ -24,6 +24,7 @@
     "dotenv": "^16.4.0",
     "grammy": "^1.40.0",
     "https-proxy-agent": "^7.0.6",
+    "openai": "^6.29.0",
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0"
   },

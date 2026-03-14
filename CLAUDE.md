@@ -97,6 +97,14 @@ Read Feishu documents (standalone docx and wiki pages) and convert them to Markd
 
 **Key module:** `src/feishu/doc-reader.ts` — `FeishuDocReader` class that fetches blocks via `docx.v1.documentBlock.list` and converts them to Markdown (reverse of `markdown-to-blocks.ts`).
 
+### Voice API (Jarvis Mode)
+
+`POST /api/voice` — Server-side Whisper STT + Agent execution + optional TTS. Accepts raw audio body (m4a, wav, webm, mp3, ogg — max 25 MB). Config via query params: `botName`, `chatId`, `language`, `tts` (openai/elevenlabs), `ttsVoice`, `sendCards`.
+
+**Key module:** `src/api/voice-handler.ts` — Whisper transcription, agent execution via `bridge.executeApiTask()`, OpenAI/ElevenLabs TTS.
+
+**Environment:** `OPENAI_API_KEY` (required for Whisper STT + OpenAI TTS), `ELEVENLABS_API_KEY` (optional for ElevenLabs TTS).
+
 ### Plan Mode Display
 
 When Claude enters plan mode and writes a plan to `.claude/plans/*.md`, the plan content is automatically sent to the Feishu user as a separate card message when `ExitPlanMode` is triggered. This is handled by `StreamProcessor` tracking plan file paths and `MessageBridge.sendPlanContent()` reading and sending the file.
