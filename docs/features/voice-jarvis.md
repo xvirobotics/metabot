@@ -77,6 +77,8 @@ Search and add **Get Contents of URL**:
 - **Request Body**: `File`
   - Select the **Recorded Audio** variable from step 2
 
+> **Custom voice**: Append `&ttsVoice=SPEAKER_ID` to the URL to change the Doubao TTS voice (default: `zh_female_sajiaonvyou_moon_bigtts`). Browse available voices in the [Volcengine TTS console](https://console.volcengine.com/speech/service/8).
+
 ### Step 4: Add "Set Variable"
 
 Search and add **Set Variable**:
