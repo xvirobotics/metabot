@@ -28,11 +28,13 @@ describe('buildCard', () => {
     };
     const json = JSON.parse(buildCard(state));
     expect(json.header.template).toBe('blue');
-    const mdElements = json.elements.filter((e: any) => e.tag === 'markdown');
-    const allContent = mdElements.map((e: any) => e.content).join('\n');
-    expect(allContent).toContain('Read');
-    expect(allContent).toContain('✅');
-    expect(allContent).toContain('⏳');
+    // Tool calls are inside the top-level collapsible panel body
+    const detailPanel = json.elements.find((e: any) => e.tag === 'collapsible_panel');
+    expect(detailPanel).toBeDefined();
+    const panelContent = detailPanel.body.map((e: any) => e.content).join('\n');
+    expect(panelContent).toContain('Read');
+    expect(panelContent).toContain('✅');
+    expect(panelContent).toContain('⏳');
   });
 
   it('builds complete card with stats', () => {

@@ -37,129 +37,86 @@ export function buildCard(state: CardState): string {
   // Calculate elapsed time for header
   const elapsed = state.startTime ? formatElapsed(Date.now() - state.startTime) : undefined;
 
-  // Tool calls section — each completed tool in a collapsible panel, running tool as plain text
+  // Collect all detail elements into a separate array to wrap in one top-level collapsible panel
+  const detailLines: string[] = [];
+
+  // Tool calls section — listed as plain text lines inside the detail panel
   if (state.toolCalls.length > 0) {
     for (const t of state.toolCalls) {
       const icon = t.status === 'running' ? '⏳' : '✅';
-      if (t.status === 'done' && (t.input || t.output)) {
-        // Completed tool with details — collapsible panel
-        const bodyParts: string[] = [];
-        if (t.input) {
-          bodyParts.push(`**Input:**\n\`\`\`\n${truncateContent(t.input, 2000)}\n\`\`\``);
-        }
-        if (t.output) {
-          bodyParts.push(`**Output:**\n\`\`\`\n${truncateContent(t.output, 2000)}\n\`\`\``);
-        }
-        elements.push({
-          tag: 'collapsible_panel',
-          expanded: false,
-          header: {
-            title: {
-              tag: 'plain_text',
-              content: `${icon} ${t.name} ${t.detail}`,
-            },
-          },
-          border: { color: 'grey' },
-          body: [
-            {
-              tag: 'markdown',
-              content: bodyParts.join('\n'),
-            },
-          ],
-        });
-      } else {
-        // Running tool or no details — plain text line
-        elements.push({
-          tag: 'markdown',
-          content: `${icon} **${t.name}** ${t.detail}`,
-        });
+      let line = `${icon} **${t.name}** ${t.detail}`;
+      if (t.status === 'done' && t.input) {
+        line += `\n> Input: \`${truncateContent(t.input, 300)}\``;
       }
+      if (t.status === 'done' && t.output) {
+        line += `\n> Output: \`${truncateContent(t.output, 300)}\``;
+      }
+      detailLines.push(line);
     }
-    elements.push({ tag: 'hr' });
   }
 
   // Subagent tasks section
   if (state.subagentTasks && state.subagentTasks.length > 0) {
+    if (detailLines.length > 0) detailLines.push('---');
     for (const task of state.subagentTasks) {
       const icon = task.status === 'running' ? '⏳' : task.status === 'completed' ? '✅' : '❌';
-      const bodyParts: string[] = [];
-      if (task.description) bodyParts.push(task.description);
-      if (task.summary) bodyParts.push(`**Summary:** ${task.summary}`);
+      let line = `${icon} **Agent:** ${truncateContent(task.description, 80)}`;
+      if (task.summary) line += `\n> ${task.summary}`;
       if (task.usage) {
-        bodyParts.push(`Tokens: ${task.usage.total_tokens} · Tools: ${task.usage.tool_uses} · ${(task.usage.duration_ms / 1000).toFixed(1)}s`);
+        line += `\n> Tokens: ${task.usage.total_tokens} · Tools: ${task.usage.tool_uses} · ${(task.usage.duration_ms / 1000).toFixed(1)}s`;
       }
-      // Subagent tool calls
       if (task.toolCalls && task.toolCalls.length > 0) {
-        if (bodyParts.length > 0) bodyParts.push('');
         for (const t of task.toolCalls) {
           const tIcon = t.status === 'running' ? '⏳' : '✅';
-          bodyParts.push(`${tIcon} **${t.name}** ${t.detail}`);
+          line += `\n> ${tIcon} ${t.name} ${t.detail}`;
         }
       }
-      // Subagent thinking
       if (task.thinkingText?.trim()) {
-        if (bodyParts.length > 0) bodyParts.push('');
-        bodyParts.push(`💭 _${truncateContent(task.thinkingText.trim(), 500)}_`);
+        line += `\n> 💭 _${truncateContent(task.thinkingText.trim(), 200)}_`;
       }
-      elements.push({
-        tag: 'collapsible_panel',
-        expanded: false,
-        header: {
-          title: {
-            tag: 'plain_text',
-            content: `${icon} Agent: ${truncateContent(task.description, 60)}`,
-          },
-        },
-        border: { color: task.status === 'running' ? 'blue' : 'grey' },
-        body: [
-          {
-            tag: 'markdown',
-            content: bodyParts.join('\n'),
-          },
-        ],
-      });
+      detailLines.push(line);
     }
   }
 
   // Tool use summaries
   if (state.toolSummaries && state.toolSummaries.length > 0) {
+    if (detailLines.length > 0) detailLines.push('---');
     for (const summary of state.toolSummaries) {
-      elements.push({
-        tag: 'collapsible_panel',
-        expanded: false,
-        header: {
-          title: {
-            tag: 'plain_text',
-            content: '📋 Tool Summary',
-          },
-        },
-        border: { color: 'grey' },
-        body: [
-          {
-            tag: 'markdown',
-            content: truncateContent(summary),
-          },
-        ],
-      });
+      detailLines.push(`📋 ${truncateContent(summary, 500)}`);
     }
   }
 
-  // Thinking content (collapsible) — only if non-empty
+  // Thinking content — only if non-empty
   if (state.thinkingText?.trim()) {
+    if (detailLines.length > 0) detailLines.push('---');
+    detailLines.push(`💭 _${truncateContent(state.thinkingText.trim(), 1000)}_`);
+  }
+
+  // Wrap all detail content in a single top-level collapsible panel
+  if (detailLines.length > 0) {
+    // Build a summary label for the panel header
+    const toolCount = state.toolCalls.length;
+    const agentCount = state.subagentTasks?.length ?? 0;
+    const labelParts: string[] = [];
+    if (toolCount > 0) labelParts.push(`${toolCount} tool${toolCount > 1 ? 's' : ''}`);
+    if (agentCount > 0) labelParts.push(`${agentCount} agent${agentCount > 1 ? 's' : ''}`);
+    if (state.thinkingText?.trim() && labelParts.length === 0) labelParts.push('thinking');
+    const label = labelParts.length > 0 ? labelParts.join(' · ') : 'details';
+
     elements.push({
       tag: 'collapsible_panel',
       expanded: false,
       header: {
         title: {
           tag: 'plain_text',
-          content: '💭 Thinking',
+          content: `🔧 ${label}`,
         },
       },
       border: { color: 'grey' },
       body: [
         {
           tag: 'markdown',
-          content: truncateContent(state.thinkingText),
+          content: detailLines.join('\n'),
         },
       ],
     });
