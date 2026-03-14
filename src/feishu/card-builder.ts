@@ -1,5 +1,5 @@
 // Re-export shared types so existing imports from this module continue to work
-export type { CardStatus, ToolCall, PendingQuestion, CardState } from '../types.js';
+export type { CardStatus, ToolCall, PendingQuestion, CardState, SubagentTask } from '../types.js';
 import type { CardState, CardStatus } from '../types.js';
 
 const STATUS_CONFIG: Record<CardStatus, { color: string; title: string; icon: string }> = {
@@ -65,6 +65,59 @@ export function buildCard(state: CardState): string {
       }
     }
     elements.push({ tag: 'hr' });
+  }
+
+  // Subagent tasks section
+  if (state.subagentTasks && state.subagentTasks.length > 0) {
+    for (const task of state.subagentTasks) {
+      const icon = task.status === 'running' ? '⏳' : task.status === 'completed' ? '✅' : '❌';
+      const bodyParts: string[] = [];
+      if (task.description) bodyParts.push(task.description);
+      if (task.summary) bodyParts.push(`**Summary:** ${task.summary}`);
+      if (task.usage) {
+        bodyParts.push(`Tokens: ${task.usage.total_tokens} · Tools: ${task.usage.tool_uses} · ${(task.usage.duration_ms / 1000).toFixed(1)}s`);
+      }
+      elements.push({
+        tag: 'collapsible_panel',
+        expanded: false,
+        header: {
+          title: {
+            tag: 'plain_text',
+            content: `${icon} Agent: ${truncateContent(task.description, 60)}`,
+          },
+        },
+        border: { color: task.status === 'running' ? 'blue' : 'grey' },
+        body: [
+          {
+            tag: 'markdown',
+            content: bodyParts.join('\n'),
+          },
+        ],
+      });
+    }
+  }
+
+  // Tool use summaries
+  if (state.toolSummaries && state.toolSummaries.length > 0) {
+    for (const summary of state.toolSummaries) {
+      elements.push({
+        tag: 'collapsible_panel',
+        expanded: false,
+        header: {
+          title: {
+            tag: 'plain_text',
+            content: '📋 Tool Summary',
+          },
+        },
+        border: { color: 'grey' },
+        body: [
+          {
+            tag: 'markdown',
+            content: truncateContent(summary),
+          },
+        ],
+      });
+    }
   }
 
   // Thinking content (collapsible) — only if non-empty

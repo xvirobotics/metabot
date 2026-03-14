@@ -20,12 +20,22 @@ export interface PendingQuestion {
   }>;
 }
 
+export interface SubagentTask {
+  taskId: string;
+  description: string;
+  status: 'running' | 'completed' | 'failed' | 'stopped';
+  summary?: string;
+  usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+}
+
 export interface CardState {
   status: CardStatus;
   userPrompt: string;
   responseText: string;
   thinkingText?: string;
   toolCalls: ToolCall[];
+  toolSummaries?: string[];
+  subagentTasks?: SubagentTask[];
   costUsd?: number;
   durationMs?: number;
   errorMessage?: string;

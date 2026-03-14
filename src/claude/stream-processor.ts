@@ -1,5 +1,5 @@
 import type { SDKMessage } from './executor.js';
-import type { CardState, ToolCall, PendingQuestion } from '../feishu/card-builder.js';
+import type { CardState, ToolCall, PendingQuestion, SubagentTask } from '../feishu/card-builder.js';
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.tiff']);
 
@@ -29,6 +29,8 @@ export class StreamProcessor {
   private responseText = '';
   private thinkingText = '';
   private toolCalls: ToolCall[] = [];
+  private toolSummaries: string[] = [];
+  private subagentTasks: Map<string, SubagentTask> = new Map();
   private currentToolName: string | null = null;
   private sessionId: string | undefined;
   private costUsd: number | undefined;
@@ -56,7 +58,7 @@ export class StreamProcessor {
 
     switch (message.type) {
       case 'system':
-        // Init message, session captured above
+        this.processSystemMessage(message);
         break;
 
       case 'assistant':
@@ -70,9 +72,22 @@ export class StreamProcessor {
         this.processStreamEvent(message);
         break;
 
-      case 'task_notification':
       case 'tool_use_summary':
-        // SDK 0.2 message types — no action needed for card display
+        if (message.summary) {
+          this.toolSummaries.push(message.summary);
+        }
+        break;
+
+      case 'tool_progress':
+        // Update elapsed time on running tools
+        if (message.tool_name) {
+          const tool = this.toolCalls.find(
+            (t) => t.name === message.tool_name && t.status === 'running',
+          );
+          if (tool && message.elapsed_time_seconds) {
+            tool.detail = `${tool.detail} (${message.elapsed_time_seconds.toFixed(0)}s)`.trim();
+          }
+        }
         break;
     }
 
@@ -88,6 +103,8 @@ export class StreamProcessor {
       responseText: this.responseText,
       thinkingText: this.thinkingText || undefined,
       toolCalls: [...this.toolCalls],
+      toolSummaries: this.toolSummaries.length > 0 ? [...this.toolSummaries] : undefined,
+      subagentTasks: this.subagentTasks.size > 0 ? [...this.subagentTasks.values()] : undefined,
       costUsd: this.costUsd,
       durationMs: this.durationMs,
       pendingQuestion: this._pendingQuestion || undefined,
@@ -161,6 +178,43 @@ export class StreamProcessor {
     }
   }
 
+  private processSystemMessage(message: SDKMessage): void {
+    if (!message.subtype) return;
+
+    switch (message.subtype) {
+      case 'task_started':
+        if (message.task_id) {
+          this.subagentTasks.set(message.task_id, {
+            taskId: message.task_id,
+            description: message.description || message.prompt || 'Subagent task',
+            status: 'running',
+          });
+        }
+        break;
+
+      case 'task_progress':
+        if (message.task_id) {
+          const task = this.subagentTasks.get(message.task_id);
+          if (task) {
+            if (message.summary) task.summary = message.summary;
+            if (message.usage) task.usage = message.usage;
+          }
+        }
+        break;
+
+      case 'task_notification':
+        if (message.task_id) {
+          const task = this.subagentTasks.get(message.task_id);
+          if (task) {
+            task.status = (message.status as SubagentTask['status']) || 'completed';
+            if (message.summary) task.summary = message.summary;
+            if (message.usage) task.usage = message.usage;
+          }
+        }
+        break;
+    }
+  }
+
   private processResultMessage(message: SDKMessage): CardState {
     this.costUsd = message.total_cost_usd;
     this.durationMs = message.duration_ms;
@@ -181,6 +235,8 @@ export class StreamProcessor {
       responseText: message.result || this.responseText,
       thinkingText: this.thinkingText || undefined,
       toolCalls: [...this.toolCalls],
+      toolSummaries: this.toolSummaries.length > 0 ? [...this.toolSummaries] : undefined,
+      subagentTasks: this.subagentTasks.size > 0 ? [...this.subagentTasks.values()] : undefined,
       costUsd: this.costUsd,
       durationMs: this.durationMs,
       errorMessage: isError

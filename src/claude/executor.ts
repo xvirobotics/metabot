@@ -110,6 +110,28 @@ export type SDKMessage = {
     };
   };
   parent_tool_use_id?: string | null;
+  // tool_use_summary fields
+  summary?: string;
+  preceding_tool_use_ids?: string[];
+  // tool_progress fields
+  tool_use_id?: string;
+  tool_name?: string;
+  elapsed_time_seconds?: number;
+  // task fields (task_started, task_progress, task_notification)
+  task_id?: string;
+  description?: string;
+  status?: string;
+  output_file?: string;
+  last_tool_name?: string;
+  task_type?: string;
+  prompt?: string;
+  usage?: {
+    total_tokens: number;
+    tool_uses: number;
+    duration_ms: number;
+  };
+  // local_command_output
+  content?: string;
 };
 
 export interface ExecutionHandle {
