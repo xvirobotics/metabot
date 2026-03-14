@@ -67,6 +67,10 @@ export class StreamProcessor {
         this.processAssistantMessage(message);
         break;
 
+      case 'user':
+        this.processUserMessage(message);
+        break;
+
       case 'result':
         return this.processResultMessage(message);
 
@@ -161,6 +165,23 @@ export class StreamProcessor {
       } else if (block.type === 'tool_result') {
         const output = extractToolOutput(block.content);
         this.completeCurrentTool(output);
+      }
+    }
+  }
+
+  private processUserMessage(message: SDKMessage): void {
+    if (!message.message?.content) return;
+
+    const isSubagent = message.parent_tool_use_id !== null && message.parent_tool_use_id !== undefined;
+
+    for (const block of message.message.content) {
+      if (block.type === 'tool_result') {
+        const output = extractToolOutput(block.content);
+        if (isSubagent) {
+          this.completeSubagentTool(message.parent_tool_use_id!, output);
+        } else {
+          this.completeCurrentTool(output);
+        }
       }
     }
   }
