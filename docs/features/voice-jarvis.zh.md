@@ -2,21 +2,7 @@
 
 通过 AirPods 和 Siri 免手免屏与任意 MetaBot Agent 语音交流。无需安装 App，只用 iOS 快捷指令。
 
-## 三种模式
-
-| 模式 | STT | TTS | 质量 | 配置时间 |
-|------|-----|-----|------|---------|
-| **Web 电话模式** | 豆包 / Whisper | 豆包 / OpenAI / ElevenLabs | 高质量 | 5 分钟 |
-| **简单模式**（Siri STT） | Siri 内置 | Siri 朗读 | 基础 | 5 分钟 |
-| **Pro 模式**（服务端 STT） | 豆包 / Whisper | 豆包 / OpenAI / ElevenLabs | 高质量 | 10 分钟 |
-
-**新功能：Web 电话模式** — 无需 iOS 快捷指令。打开 Web UI，点击电话图标即可开始对话。VAD 自动检测说完。详见 [Web UI — 电话语音模式](web-ui.md#电话语音模式)。
-
-**推荐：Pro 模式** — 服务端 STT（豆包或 Whisper）语音识别效果远优于 Siri，尤其是中文和中英混合输入。配置火山引擎密钥后默认使用豆包。
-
 ## 工作原理
-
-### 简单模式（Siri STT）
 
 ```
 "Hey Siri, Jarvis"
@@ -27,99 +13,12 @@
         ↓
   Agent 执行任务（Claude Code）
         ↓
-  通过 Siri 语音回复
-```
-
-### Pro 模式（服务端 STT）
-
-```
-"Hey Siri, Jarvis"
-        ↓
-  录制音频（原始音频捕获）
-        ↓
-  HTTP POST 音频到 MetaBot /api/voice
-        ↓
-  豆包/Whisper STT → Agent → 可选 TTS
-        ↓
-  通过 Siri 或 TTS 音频回复
+  通过 AirPods 语音回复
 ```
 
 全程不用看屏幕。走路、爬山、开车时都能用。
 
----
-
-## Pro 模式设置（推荐）
-
-### 前置条件
-
-- 开启 Siri 的 iPhone
-- AirPods（或任何支持 Siri 的耳机）
-- MetaBot 服务器可从外网访问（公网 IP + 9100 端口开放）
-- MetaBot `.env` 中的 `API_SECRET`
-- MetaBot `.env` 中设置 `VOLCENGINE_TTS_APPID` + `VOLCENGINE_TTS_ACCESS_KEY`（推荐，用于豆包 STT+TTS），或 `OPENAI_API_KEY`（用于 Whisper STT 备选）
-
-### 第 1 步：创建快捷指令
-
-打开 iPhone **快捷指令** App → 右上角 **+** → 命名为 **Jarvis**
-
-### 第 2 步：添加「录制音频」
-
-搜索添加 **录制音频** 动作：
-- **音频质量**：正常
-- **开始录制**：轻点时（或立即）
-- **结束录制**：轻点时（说完后再点一下）
-
-### 第 3 步：添加「获取 URL 内容」
-
-搜索添加 **获取 URL 内容** 动作：
-
-- **URL**：`http://你的服务器IP:9100/api/voice?botName=quanwang&chatId=voice_jarvis&language=zh`
-- **方法**：`POST`
-- **头部**：
-  - `Authorization` = `Bearer 你的API_SECRET`
-- **请求体**：`文件`
-  - 选择上一步的 **录制的音频** 变量
-
-> **注意**：URL 字段填固定地址（包含查询参数），「录制的音频」作为文件请求体发送。
-
-> **自定义音色**：在 URL 末尾加 `&ttsVoice=音色ID` 可切换豆包 TTS 音色（默认：`zh_female_sajiaonvyou_moon_bigtts`）。可用音色见[火山引擎 TTS 控制台](https://console.volcengine.com/speech/service/8)。
-
-### 第 4 步：添加「设定变量」
-
-搜索添加 **设定变量** 动作：
-- **名称**：`audio`（任意名称均可）
-- **值**：选择 **URL 的内容**（上一步结果）
-
-### 第 5 步：添加「播放声音」
-
-搜索添加 **播放声音** 动作：
-- 输入选择上一步的 `audio` 变量
-
-> **为什么不用「朗读文本」？** — 开启 TTS 时（配置火山引擎密钥后默认开启），API 直接返回音频数据而非 JSON 文本。「播放声音」直接播放返回的音频。如果关闭 TTS，API 返回 JSON，此时改用「获取词典值」（key `responseText`）+「朗读文本」。
-
-### 第 6 步：测试
-
-1. 戴上 AirPods
-2. 说 **"Hey Siri, Jarvis"**
-3. 点击开始录音，说出指令，点击停止
-4. 等几秒 — 回复会通过耳机播放
-
-### URL 查询参数
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `botName` | （必填） | 要对话的 Bot |
-| `chatId` | `voice_default` | 会话 ID，用于多轮对话 |
-| `language` | `zh` | STT 语言提示（`zh`、`en`、`auto`） |
-| `stt` | `doubao` | STT 服务：`doubao` 或 `whisper`（根据已配置的密钥自动选择） |
-| `tts` | `doubao` | TTS 服务：`doubao`、`openai` 或 `elevenlabs`（根据已配置的密钥自动选择） |
-| `ttsVoice` | （按服务商） | TTS 声音（豆包: speaker ID；OpenAI: alloy/echo/fable/onyx/nova/shimmer；ElevenLabs: voice ID） |
-| `sendCards` | `false` | 同时发送到飞书 |
-| `voiceMode` | `false` | 启用语音模式（简短回复，`maxTurns=1`） |
-
----
-
-## 简单模式设置（Siri STT）
+## 设置方法（5 分钟）
 
 ### 前置条件
 
@@ -197,95 +96,17 @@
 
 ### 飞书卡片同步
 
-在请求中加 `sendCards` = `true`，回复会同时发送到飞书聊天卡片。适合代码等需要稍后阅读的内容。
-
-## Voice API 参考
-
-### POST `/api/voice`
-
-服务端 STT（豆包或 Whisper）+ Agent 执行 + 可选 TTS。配置火山引擎密钥后默认使用豆包。
-
-**请求：**
-- Body：原始音频字节（m4a、wav、webm、mp3、ogg — 最大 100 MB）
-- 认证：`Authorization: Bearer YOUR_API_SECRET`
-- 配置通过 URL 查询参数（见上表）
-
-**响应（无 TTS）：**
-```json
-{
-  "success": true,
-  "transcript": "帮我看一下项目状态",
-  "responseText": "项目当前状态...",
-  "costUsd": 0.05,
-  "durationMs": 3200
-}
-```
-
-**响应（带 TTS）：**
-- `Content-Type: audio/mpeg`
-- `X-Transcript`：base64 编码的转录文本
-- `X-Response-Text`：base64 编码的响应文本（前 2000 字符）
-- `X-Cost-Usd`：费用（美元）
-
-**环境变量：**
-
-| 变量 | 说明 |
-|------|------|
-| `VOLCENGINE_TTS_APPID` | 豆包 STT + TTS 必需（推荐，火山引擎控制台获取） |
-| `VOLCENGINE_TTS_ACCESS_KEY` | 豆包 STT + TTS 必需（推荐，火山引擎控制台获取） |
-| `VOLCENGINE_TTS_RESOURCE_ID` | 豆包 TTS 资源 ID（默认: `volc.service_type.10029`） |
-| `OPENAI_API_KEY` | Whisper STT 和 OpenAI TTS 备选 |
-| `ELEVENLABS_API_KEY` | ElevenLabs TTS 必需 |
-| `VOICE_MODEL` | 语音模式使用的 Claude 模型（可选覆盖） |
-
-### POST `/api/tts`
-
-轻量级文字转语音端点 — 无 STT，无 Agent 执行。纯文本输入，音频输出。
-
-**请求：**
-
-```bash
-curl -X POST http://localhost:9100/api/tts \
-  -H "Authorization: Bearer YOUR_API_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"text": "你好世界", "provider": "doubao", "voice": "zh_female_wanqudashu_moon_bigtts"}'
-```
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `text` | 是 | 要转换的文本 |
-| `provider` | 否 | `doubao`、`openai` 或 `elevenlabs`（根据已配置密钥自动选择） |
-| `voice` | 否 | 声音/音色 ID（各服务商有默认值） |
-
-**响应：** `audio/mpeg` 二进制数据，附带响应头：
-
-- `X-Text-Length`：原始文本长度
-- `X-Provider`：使用的 TTS 服务商
-- `X-Voice`：使用的声音 ID
-
-**CLI 快捷命令：**
-
-```bash
-mb voice "你好世界"                   # 生成 MP3，输出文件路径
-mb voice "你好" --play               # 生成并播放音频
-mb voice "你好" -o greeting.mp3      # 保存到指定文件
-echo "长文本" | mb voice             # 从标准输入读取
-mb voice "你好" --provider openai --voice nova  # 指定服务商/声音
-```
-
-详见 [mb CLI — 语音](../reference/cli-mb.md#语音) 完整 CLI 参考。
+在 JSON 请求体中加 `sendCards` = `true`（布尔值），回复会同时发送到飞书聊天卡片。适合代码等需要稍后阅读的内容。
 
 ## 限制
 
 - 每次交互需要重新说 "Hey Siri, Jarvis"（无法持续对话循环）
-- Siri 听写对很长的语音输入可能截断（仅简单模式）
+- Siri 听写对很长的语音输入可能截断
 - 长回复（代码、详细分析）更适合在飞书中阅读
-- 需要网络连接（Siri + Whisper STT + MetaBot API）
-- 音频文件需小于 100 MB（豆包）/ 25 MB（Whisper）
+- 需要网络连接（Siri STT + MetaBot API）
 
 ## 安全
 
 - API 端点通过 `API_SECRET`（Bearer token）保护
 - 生产环境建议用 HTTPS（反向代理 + Let's Encrypt）
 - `chatId` 固定在快捷指令中，有手机权限即可使用
-- 音频文件转录后立即删除
