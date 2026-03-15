@@ -630,6 +630,7 @@ export class MessageBridge {
           metrics.incCounter('metabot_tasks_total');
           metrics.incCounter('metabot_tasks_by_status', lastState.status === 'complete' ? 'success' : 'error');
 
+          await this.sendCompletionNotice(chatId, lastState, durationMs);
           await this.outputHandler.sendOutputFiles(chatId, outputsDir, processor, lastState);
           return; // skip the normal error handling below
         } catch (retryErr: any) {
