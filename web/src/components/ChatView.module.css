@@ -24,6 +24,22 @@
   50% { box-shadow: 0 0 0 20px rgba(0, 214, 143, 0); }
 }
 @keyframes callSpin { to { transform: rotate(360deg); } }
+@keyframes voiceWave {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}
+@keyframes voiceSlideUp {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes voiceGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 214, 143, 0.15); }
+  50% { box-shadow: 0 0 0 8px rgba(0, 214, 143, 0); }
+}
+@keyframes voiceCancelGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.15); }
+  50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+}
 
 /* ═══ Chat Layout (chat + file panel) ═══ */
 .chatLayout {
@@ -88,7 +104,7 @@
   background: var(--accent);
   color: #fff;
   border-radius: 16px 16px 4px 16px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   line-height: 1.55;
   word-break: break-word;
   white-space: pre-line;
@@ -209,7 +225,7 @@
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   font-family: var(--font-mono);
   color: var(--text-1);
   border-radius: var(--r-sm);
@@ -259,7 +275,7 @@
 
 /* ═══ Response Content ═══ */
 .responseContent {
-  font-size: 14.5px;
+  font-size: calc(14.5px * var(--font-scale));
   line-height: 1.8;
   color: var(--text-0);
   letter-spacing: -0.1px;
@@ -369,7 +385,7 @@
   padding: 16px 18px;
   background: var(--code-bg);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   line-height: 1.7;
   tab-size: 2;
 }
@@ -452,6 +468,7 @@
 .inputArea {
   flex-shrink: 0;
   padding: 0 28px 0;
+  position: relative;
 }
 
 .inputWrapper {
@@ -477,7 +494,7 @@
   min-height: 24px;
   max-height: 200px;
   padding: 6px 4px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   line-height: 1.5;
   color: var(--text-0);
   resize: none;
@@ -661,6 +678,242 @@
   font-size: 11px;
   color: var(--text-3);
 }
+
+/* ═══ Hold-to-Talk Voice Input ═══ */
+.holdToTalk {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+}
+
+.holdToTalkBtn {
+  width: 100%;
+  max-width: 220px;
+  height: 40px;
+  border-radius: 20px;
+  background: var(--surface-2);
+  border: 1px solid var(--glass-border);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  transition: background var(--duration-fast), border-color var(--duration-fast), color var(--duration-fast);
+}
+
+.holdToTalkBtnActive {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.holdToTalkBtnCancel {
+  background: var(--red-soft);
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* ═══ Voice Overlay (recording / recognizing / preview) ═══ */
+.voiceOverlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  padding: 0 16px;
+  animation: voiceSlideUp 0.25s var(--ease-out);
+  pointer-events: none;
+}
+.voiceOverlay > * { pointer-events: auto; }
+
+/* ── Recording state ── */
+.voiceRecording {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 20px;
+  width: 100%;
+  max-width: 520px;
+  background: var(--surface-1);
+  border: 1px solid rgba(0, 214, 143, 0.2);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg), 0 0 40px rgba(0, 214, 143, 0.06);
+  animation: voiceGlow 2s ease-in-out infinite;
+}
+
+.voiceRecordingCancel {
+  border-color: rgba(239, 68, 68, 0.25) !important;
+  animation: voiceCancelGlow 1.5s ease-in-out infinite !important;
+}
+.voiceRecordingCancel .voiceWaveBar {
+  background: var(--red);
+}
+
+/* Streaming partial text — shown during recording & recognizing */
+.voicePartialText {
+  font-size: calc(14px * var(--font-scale));
+  line-height: 1.6;
+  color: var(--text-0);
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+  animation: fadeIn 0.3s var(--ease-out);
+}
+
+/* Bottom bar: waveform + timer + hint */
+.voiceRecordingBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.voiceWave {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 24px;
+}
+
+.voiceWaveBar {
+  width: 3px;
+  height: 24px;
+  border-radius: 1.5px;
+  background: var(--accent);
+  transform-origin: center;
+  animation: voiceWave 0.6s ease-in-out infinite;
+  will-change: transform;
+}
+.voiceWaveBar:nth-child(1) { animation-delay: 0s; animation-duration: 0.7s; }
+.voiceWaveBar:nth-child(2) { animation-delay: 0.1s; animation-duration: 0.55s; }
+.voiceWaveBar:nth-child(3) { animation-delay: 0.05s; animation-duration: 0.65s; }
+.voiceWaveBar:nth-child(4) { animation-delay: 0.15s; animation-duration: 0.5s; }
+.voiceWaveBar:nth-child(5) { animation-delay: 0.08s; animation-duration: 0.6s; }
+
+.voiceTimer {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+  min-width: 36px;
+}
+
+.voiceHint {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-left: auto;
+  transition: color var(--duration-fast);
+}
+
+.voiceHintCancel {
+  color: var(--red);
+  font-weight: 600;
+}
+
+/* ── Recognizing state ── */
+.voiceRecognizing {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 20px;
+  width: 100%;
+  max-width: 520px;
+  background: var(--surface-1);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+}
+
+.voiceRecognizingBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.voiceSpinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--surface-3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+/* ── Preview state — transcript bubble + actions ── */
+.voicePreview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 520px;
+  animation: voiceSlideUp 0.25s var(--ease-out);
+}
+
+.voiceBubble {
+  padding: 16px 20px;
+  background: var(--surface-1);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+  font-size: calc(15px * var(--font-scale));
+  line-height: 1.65;
+  color: var(--text-0);
+  max-height: 180px;
+  overflow-y: auto;
+  word-break: break-word;
+}
+
+.voiceActions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.voiceActions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 20px;
+  border-radius: var(--r-full);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--glass-border);
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.voiceActionCancel {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.voiceActionCancel:hover { background: var(--red-soft); color: var(--red); border-color: rgba(239, 68, 68, 0.2); }
+.voiceActionCancel:active { transform: scale(0.96); }
+
+.voiceActionEdit {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+.voiceActionEdit:hover { background: var(--accent-soft); color: var(--accent-text); border-color: rgba(0, 214, 143, 0.15); }
+.voiceActionEdit:active { transform: scale(0.96); }
+
+.voiceActionSend {
+  background: var(--gradient-accent-vivid);
+  color: #000;
+  border-color: transparent !important;
+  font-weight: 600;
+  box-shadow: var(--shadow-accent);
+}
+.voiceActionSend:hover { filter: brightness(1.1); box-shadow: var(--shadow-accent-lg); }
+.voiceActionSend:active { transform: scale(0.96); }
 
 /* ═══ Call Overlay ═══ */
 .callOverlay {
@@ -1459,9 +1712,9 @@
   .textarea { font-size: 16px; /* prevent iOS zoom on focus */ }
   .messageRowUser { padding-left: 40px; }
   .messageRowAssistant { padding: 12px 0 6px; }
-  .userBubble { max-width: 90%; font-size: 14px; padding: 10px 16px; border-radius: 14px 14px 4px 14px; }
+  .userBubble { max-width: 90%; font-size: calc(14px * var(--font-scale)); padding: 10px 16px; border-radius: 14px 14px 4px 14px; }
   .assistantMessage { padding: 4px 0 4px 12px; }
-  .responseContent { font-size: 14px; line-height: 1.7; }
+  .responseContent { font-size: calc(14px * var(--font-scale)); line-height: 1.7; }
   .emptyState { padding: 32px 16px; }
   .emptyTitle { font-size: 20px; }
   .emptySubtitle { font-size: 14px; margin-bottom: 28px; }
@@ -1498,8 +1751,8 @@
   .attachCardFile { min-width: 0; max-width: 100%; }
   .attachCardAudio { min-width: 0; max-width: 100%; }
   .attachName { max-width: 180px; }
-  .codeBlockBody pre { font-size: 12px; padding: 12px 14px; }
-  .toolCallItem { font-size: 11px; }
+  .codeBlockBody pre { font-size: calc(12px * var(--font-scale)); padding: 12px 14px; }
+  .toolCallItem { font-size: calc(11px * var(--font-scale)); }
   .sendBtn { width: 36px; height: 36px; }
   .attachBtn { width: 32px; height: 32px; }
   .sttBtn { width: 32px; height: 32px; }
@@ -1508,6 +1761,13 @@
   .filePreview { padding: 4px 8px; max-width: 160px; }
   .systemBubble { font-size: 11px; max-width: 90%; }
   .dropOverlay { font-size: 13px; }
+  /* Hold-to-talk / voice overlay mobile */
+  .holdToTalkBtn { height: 42px; font-size: 15px; }
+  .voiceOverlay { padding: 0 8px; }
+  .voiceRecording { padding: 12px 16px; gap: 12px; }
+  .voicePreview { max-width: 100%; }
+  .voiceBubble { font-size: calc(14px * var(--font-scale)); padding: 14px 16px; }
+  .voiceActions button { padding: 8px 16px; font-size: 13px; }
   /* Mobile file overlay adjustments */
   .mobileFileOverlay .previewImage { max-height: 70vh; }
   .mobileFileOverlay .previewIframe { height: calc(100vh - 60px); }
@@ -1516,5 +1776,4 @@
 /* Extra small screens */
 @media (max-width: 380px) {
   .callBtn { display: none; }
-  .sttBtn { display: none; }
 }

@@ -94,6 +94,9 @@
   --font-sans: 'Space Grotesk', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
 
+  /* Font scale (overridden by JS) */
+  --font-scale: 1;
+
   /* Layout */
   --sidebar-w: 280px;
 }

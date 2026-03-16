@@ -109,8 +109,8 @@ export interface MemoryDocument {
 export type WSIncomingMessage =
   | { type: 'connected'; bots: BotInfo[] }
   | { type: 'bots_updated'; bots: BotInfo[] }
-  | { type: 'state'; chatId: string; messageId: string; state: CardState; botName?: string }
-  | { type: 'complete'; chatId: string; messageId: string; state: CardState; botName?: string }
+  | { type: 'state'; chatId: string; messageId: string; state: CardState; botName?: string; groupId?: string }
+  | { type: 'complete'; chatId: string; messageId: string; state: CardState; botName?: string; groupId?: string }
   | { type: 'error'; chatId: string; messageId: string; error: string }
   | { type: 'notice'; text?: string; chatId?: string; title?: string; content?: string }
   | { type: 'file'; chatId: string; url: string; name: string; mimeType: string; size?: number }
@@ -118,6 +118,10 @@ export type WSIncomingMessage =
   | { type: 'group_deleted'; groupId: string }
   | { type: 'groups_list'; groups: ChatGroup[] }
   | { type: 'voice_call'; sessionId: string; roomId: string; token: string; appId: string; userId: string; aiUserId: string; chatId: string; botName: string; prompt?: string }
+  | { type: 'asr_started' }
+  | { type: 'asr_transcript'; text: string; isFinal: boolean }
+  | { type: 'asr_error'; error: string }
+  | { type: 'asr_stopped' }
   | { type: 'pong' };
 
 export type WSOutgoingMessage =
@@ -128,6 +132,9 @@ export type WSOutgoingMessage =
   | { type: 'create_group'; name: string; members: string[] }
   | { type: 'delete_group'; groupId: string }
   | { type: 'list_groups' }
+  | { type: 'subscribe_group'; groupId: string; chatId: string }
+  | { type: 'start_asr' }
+  | { type: 'stop_asr' }
   | { type: 'ping' };
 
 export type ActiveView = 'chat' | 'memory' | 'voice' | 'settings' | 'team';

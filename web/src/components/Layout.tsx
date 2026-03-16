@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useStore } from '../store';
 import { useWebSocket } from '../hooks/useWebSocket';
 import type { BotInfo, ChatGroup, ChatSession } from '../types';
@@ -358,10 +358,21 @@ function GroupCard({
    Mobile: native stack navigation (list ↔ chat) + bottom tabs
    ═══════════════════════════════════════════════════════════════ */
 
+/** Check if current route matches the expected activeView (prevents stale children flash) */
+function routeMatchesView(pathname: string, view: string): boolean {
+  const p = pathname.replace(/^\/web/, '') || '/';
+  if (view === 'chat') return p === '/' || p === '';
+  if (view === 'memory') return p.startsWith('/memory');
+  if (view === 'settings') return p.startsWith('/settings');
+  if (view === 'team') return p.startsWith('/team');
+  return true;
+}
+
 interface LayoutProps { children: ReactNode; }
 
 export function Layout({ children }: LayoutProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const activeView = useStore((s) => s.activeView);
   const setView = useStore((s) => s.setView);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
@@ -564,7 +575,10 @@ export function Layout({ children }: LayoutProps) {
         {activeView === 'chat' && !mobileShowChat ? (
           <div className={s.mobileChatList}>{botList}</div>
         ) : (
-          <main className={s.mobileMain}>{children}</main>
+          <main className={s.mobileMain}>
+            {/* Avoid flashing stale children while route transitions */}
+            {routeMatchesView(location.pathname, activeView) ? children : null}
+          </main>
         )}
 
         {/* ── Bottom tab bar (hidden when in active chat) ── */}

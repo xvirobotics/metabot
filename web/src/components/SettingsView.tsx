@@ -4,6 +4,8 @@ import styles from './SettingsView.module.css';
 export function SettingsView() {
   const theme = useStore((s) => s.theme);
   const toggleTheme = useStore((s) => s.toggleTheme);
+  const fontSize = useStore((s) => s.fontSize);
+  const setFontSize = useStore((s) => s.setFontSize);
   const token = useStore((s) => s.token);
   const logout = useStore((s) => s.logout);
   const connected = useStore((s) => s.connected);
@@ -42,6 +44,28 @@ export function SettingsView() {
               onClick={toggleTheme}
               aria-label="Toggle theme"
             />
+          </div>
+
+          <div className={styles.cardItem}>
+            <div className={styles.cardItemLeft}>
+              <span className={styles.cardItemLabel}>Font Size</span>
+              <span className={styles.cardItemDesc}>
+                Adjust text size for readability
+              </span>
+            </div>
+            <div className={styles.fontSizeGroup}>
+              {(['small', 'normal', 'large', 'xl'] as const).map((size) => (
+                <button
+                  key={size}
+                  className={`${styles.fontSizeBtn} ${
+                    fontSize === size ? styles.fontSizeBtnActive : ''
+                  }`}
+                  onClick={() => setFontSize(size)}
+                >
+                  {{ small: 'S', normal: 'M', large: 'L', xl: 'XL' }[size]}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>

@@ -140,6 +140,10 @@ export interface AppStore {
   theme: Theme;
   toggleTheme: () => void;
 
+  // Font size
+  fontSize: 'small' | 'normal' | 'large' | 'xl';
+  setFontSize: (size: 'small' | 'normal' | 'large' | 'xl') => void;
+
   // Team
   teamStatus: TeamStatus | null;
   setTeamStatus: (status: TeamStatus) => void;
@@ -391,6 +395,15 @@ export const useStore = create<AppStore>((set, get) => ({
     set({ theme: next });
   },
 
+  /* ---- Font size ---- */
+  fontSize: (localStorage.getItem('metabot:fontsize') as 'small' | 'normal' | 'large' | 'xl') || 'normal',
+  setFontSize(size: 'small' | 'normal' | 'large' | 'xl') {
+    const scales: Record<string, string> = { small: '0.9', normal: '1', large: '1.1', xl: '1.25' };
+    localStorage.setItem('metabot:fontsize', size);
+    document.documentElement.style.setProperty('--font-scale', scales[size] || '1');
+    set({ fontSize: size });
+  },
+
   /* ---- Team ---- */
   teamStatus: null,
   setTeamStatus(status: TeamStatus) {
@@ -402,6 +415,12 @@ export const useStore = create<AppStore>((set, get) => ({
   setIncomingVoiceCall(call) {
     set({ incomingVoiceCall: call });
   },
+
+  /* ---- Streaming ASR ---- */
+  asrState: 'idle' as 'idle' | 'connecting' | 'active' | 'error',
+  asrPartialText: '',
+  setAsrState(state: 'idle' | 'connecting' | 'active' | 'error') { set({ asrState: state }); },
+  setAsrPartialText(text: string) { set({ asrPartialText: text }); },
 
   /* ---- Sidebar ---- */
   sidebarOpen: window.innerWidth > 768,

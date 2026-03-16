@@ -54,7 +54,7 @@ export function ChatView() {
 
   const activeBot = bots.find((b) => b.name === activeBotName);
 
-  const { send } = useWebSocket();
+  const { send, sendBinary } = useWebSocket();
 
   const isMobile = useIsMobile();
   const autoScrollRef = useRef(true);
@@ -373,6 +373,8 @@ export function ChatView() {
           onStop={handleStop}
           onStartCall={startCall}
           callActive={callActive}
+          send={send}
+          sendBinary={sendBinary}
         />
 
         {/* File panel toggle button */}

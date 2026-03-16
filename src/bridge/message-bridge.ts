@@ -66,6 +66,8 @@ export interface ApiTaskOptions {
   onOutputFiles?: (files: import('./outputs-manager.js').OutputFile[]) => void;
   /** Group chat member names — injected into system prompt for inter-bot communication. */
   groupMembers?: string[];
+  /** Group ID — used for inter-bot communication chatId pattern. */
+  groupId?: string;
 }
 
 export interface ApiTaskResult {
@@ -724,7 +726,7 @@ export class MessageBridge {
     const effectiveMessageId = messageId || `api-${chatId}-${Date.now()}`;
     options.onUpdate?.(initialState, effectiveMessageId, false);
 
-    const apiContext = { botName: this.config.name, chatId, groupMembers: options.groupMembers };
+    const apiContext = { botName: this.config.name, chatId, groupMembers: options.groupMembers, groupId: options.groupId };
 
     const executionHandle = this.executor.startExecution({
       prompt,

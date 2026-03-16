@@ -22,6 +22,8 @@ export function useWebSocket() {
   const removeGroup = useStore((s) => s.removeGroup);
   const setGroups = useStore((s) => s.setGroups);
   const setIncomingVoiceCall = useStore((s) => s.setIncomingVoiceCall);
+  const setAsrState = useStore((s) => s.setAsrState);
+  const setAsrPartialText = useStore((s) => s.setAsrPartialText);
 
   const wsRef = useRef<WebSocket | null>(null);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
@@ -59,6 +61,14 @@ export function useWebSocket() {
       // Request group list
       ws.send(JSON.stringify({ type: 'list_groups' }));
 
+      // Subscribe to grouptalk chatIds for existing group sessions
+      const store = useStore.getState();
+      for (const session of store.sessions.values()) {
+        if (session.groupId) {
+          ws.send(JSON.stringify({ type: 'subscribe_group', groupId: session.groupId, chatId: session.id }));
+        }
+      }
+
       // Start heartbeat
       heartbeatRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -69,6 +79,8 @@ export function useWebSocket() {
 
     ws.onmessage = (event) => {
       if (!mountedRef.current) return;
+      // Binary frames are not expected from server (all ASR results come as JSON)
+      if (typeof event.data !== 'string') return;
       try {
         const msg = JSON.parse(event.data) as WSIncomingMessage;
         switch (msg.type) {
@@ -81,12 +93,34 @@ export function useWebSocket() {
             break;
 
           case 'state':
-            updateMessageState(msg.chatId, msg.messageId, msg.state, msg.botName);
+          case 'complete': {
+            if (msg.groupId) {
+              // Inter-bot message in a group chat — find the session by groupId
+              const store = useStore.getState();
+              const groupSession = Array.from(store.sessions.values()).find(
+                (s) => s.groupId === msg.groupId,
+              );
+              if (groupSession) {
+                const existingMsg = groupSession.messages.find((m) => m.id === msg.messageId);
+                if (!existingMsg) {
+                  // Create a new assistant message for this inter-bot response
+                  addMessage(groupSession.id, {
+                    id: msg.messageId,
+                    type: 'assistant',
+                    text: '',
+                    state: msg.state,
+                    timestamp: Date.now(),
+                    botName: msg.botName,
+                  });
+                } else {
+                  updateMessageState(groupSession.id, msg.messageId, msg.state, msg.botName);
+                }
+              }
+            } else {
+              updateMessageState(msg.chatId, msg.messageId, msg.state, msg.botName);
+            }
             break;
-
-          case 'complete':
-            updateMessageState(msg.chatId, msg.messageId, msg.state, msg.botName);
-            break;
+          }
 
           case 'error': {
             // Find the session for this chatId and update the message
@@ -175,6 +209,24 @@ export function useWebSocket() {
             });
             break;
 
+          // ── Streaming ASR events ──
+          case 'asr_started':
+            setAsrState('active');
+            break;
+
+          case 'asr_transcript':
+            setAsrPartialText(msg.text);
+            break;
+
+          case 'asr_error':
+            setAsrState('error');
+            console.error('Streaming ASR error:', msg.error);
+            break;
+
+          case 'asr_stopped':
+            setAsrState('idle');
+            break;
+
           case 'pong':
             // heartbeat ack — nothing to do
             break;
@@ -204,12 +256,22 @@ export function useWebSocket() {
         if (mountedRef.current) connect();
       }, delay);
     };
-  }, [token, cleanup, setConnected, setBots, updateMessageState, addMessage, addMessageAttachment, markRunningMessagesDisconnected, addGroup, removeGroup, setGroups, setIncomingVoiceCall]);
+  }, [token, cleanup, setConnected, setBots, updateMessageState, addMessage, addMessageAttachment, markRunningMessagesDisconnected, addGroup, removeGroup, setGroups, setIncomingVoiceCall, setAsrState, setAsrPartialText]);
 
   const send = useCallback(
     (msg: WSOutgoingMessage) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify(msg));
+      }
+    },
+    [],
+  );
+
+  /** Send raw binary data (e.g. PCM audio for streaming ASR) */
+  const sendBinary = useCallback(
+    (data: ArrayBuffer | Uint8Array) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(data);
       }
     },
     [],
@@ -229,5 +291,5 @@ export function useWebSocket() {
     };
   }, [token, connect, cleanup]);
 
-  return { send, reconnect };
+  return { send, sendBinary, reconnect };
 }

@@ -172,6 +172,10 @@ export async function handleTaskRoutes(
       const subs = ws.handle?.subscriptions;
       const hasWsSubscribers = subs && (subs.getSubscribers(chatId)?.size ?? 0) > 0;
 
+      // Detect grouptalk chatId pattern: grouptalk-{groupId}-{botName}
+      const grouptalkMatch = chatId.match(/^grouptalk-(.+)-[^-]+$/);
+      const grouptalkGroupId = grouptalkMatch ? grouptalkMatch[1] : undefined;
+
       const result = await bot.bridge.executeApiTask({
         prompt,
         chatId,
@@ -186,6 +190,7 @@ export async function handleTaskRoutes(
               messageId: bridgeMessageId,
               state,
               botName,
+              ...(grouptalkGroupId ? { groupId: grouptalkGroupId } : {}),
             });
           },
         } : {}),

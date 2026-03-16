@@ -10,6 +10,7 @@ import type { PeerManager } from '../api/peer-manager.js';
 import { ChatSubscriptionManager } from './chat-subscriptions.js';
 import { GroupManager, type ChatGroup } from './group-manager.js';
 import type { PushService } from '../api/push-service.js';
+import { StreamingASRSession, createStreamingASRSession, isStreamingASRAvailable } from '../api/streaming-asr.js';
 
 // ─── Client → Server messages ──────────────────────────────────────────────
 
@@ -21,6 +22,9 @@ type ClientMessage =
   | { type: 'create_group'; name: string; members: string[] }
   | { type: 'delete_group'; groupId: string }
   | { type: 'list_groups' }
+  | { type: 'subscribe_group'; groupId: string; chatId: string }
+  | { type: 'start_asr' }
+  | { type: 'stop_asr' }
   | { type: 'ping' };
 
 // ─── Server → Client messages ──────────────────────────────────────────────
@@ -28,14 +32,18 @@ type ClientMessage =
 type ServerMessage =
   | { type: 'connected'; bots: BotInfo[] }
   | { type: 'bots_updated'; bots: BotInfo[] }
-  | { type: 'state'; chatId: string; messageId: string; state: CardState; botName?: string }
-  | { type: 'complete'; chatId: string; messageId: string; state: CardState; botName?: string }
+  | { type: 'state'; chatId: string; messageId: string; state: CardState; botName?: string; groupId?: string }
+  | { type: 'complete'; chatId: string; messageId: string; state: CardState; botName?: string; groupId?: string }
   | { type: 'error'; chatId: string; messageId?: string; error: string }
   | { type: 'notice'; chatId: string; title: string; content: string; color?: string }
   | { type: 'file'; chatId: string; url: string; name: string; mimeType: string; size?: number }
   | { type: 'group_created'; group: ChatGroup }
   | { type: 'group_deleted'; groupId: string }
   | { type: 'groups_list'; groups: ChatGroup[] }
+  | { type: 'asr_started' }
+  | { type: 'asr_transcript'; text: string; isFinal: boolean }
+  | { type: 'asr_error'; error: string }
+  | { type: 'asr_stopped' }
   | { type: 'pong' };
 
 // ─── MIME types for static file serving ────────────────────────────────────
@@ -154,8 +162,19 @@ export function setupWebSocketServer(
       ws.ping();
     }, HEARTBEAT_INTERVAL_MS);
 
-    // Handle client messages
-    ws.on('message', (data) => {
+    // Per-connection streaming ASR session
+    let asrSession: StreamingASRSession | null = null;
+
+    // Handle client messages (text = JSON commands, binary = PCM audio)
+    ws.on('message', (data, isBinary) => {
+      // Binary frames → forward to active ASR session
+      if (isBinary) {
+        if (asrSession) {
+          asrSession.sendAudio(data as Buffer);
+        }
+        return;
+      }
+
       let msg: ClientMessage;
       try {
         msg = JSON.parse(data.toString()) as ClientMessage;
@@ -229,6 +248,50 @@ export function setupWebSocketServer(
           sendMessage(ws, { type: 'groups_list', groups: groupManager.list() });
           break;
 
+        case 'subscribe_group': {
+          const subGroup = groupManager.get(msg.groupId);
+          if (subGroup) {
+            subscriptions.subscribe(msg.chatId, ws);
+            for (const member of subGroup.members) {
+              subscriptions.subscribe(`grouptalk-${subGroup.id}-${member}`, ws);
+            }
+          }
+          break;
+        }
+
+        case 'start_asr': {
+          // Destroy previous session if any
+          if (asrSession) { asrSession.destroy(); asrSession = null; }
+
+          if (!isStreamingASRAvailable()) {
+            sendMessage(ws, { type: 'asr_error', error: 'Streaming ASR not configured' });
+            break;
+          }
+
+          {
+            const session = createStreamingASRSession(
+              wsLogger,
+              (event) => sendMessage(ws, { type: 'asr_transcript', text: event.text, isFinal: event.isFinal }),
+              (error) => { sendMessage(ws, { type: 'asr_error', error }); asrSession = null; },
+              () => { sendMessage(ws, { type: 'asr_stopped' }); asrSession = null; },
+            );
+            asrSession = session;
+            session.start().then(
+              () => sendMessage(ws, { type: 'asr_started' }),
+              (err: any) => {
+                wsLogger.error({ err }, 'Failed to start streaming ASR');
+                sendMessage(ws, { type: 'asr_error', error: err.message || 'Failed to start ASR' });
+                asrSession = null;
+              },
+            );
+          }
+          break;
+        }
+
+        case 'stop_asr':
+          if (asrSession) { asrSession.stop(); }
+          break;
+
         case 'ping':
           sendMessage(ws, { type: 'pong' });
           break;
@@ -243,6 +306,8 @@ export function setupWebSocketServer(
       connectedClients.delete(ws);
       subscriptions.unsubscribeAll(ws);
       clearInterval(heartbeat);
+      // Clean up ASR session
+      if (asrSession) { asrSession.destroy(); asrSession = null; }
       // Reject all pending answers
       for (const [, { reject }] of pendingAnswers) {
         reject(new Error('WebSocket connection closed'));
@@ -505,6 +570,10 @@ async function handleGroupChat(
 
   // Subscribe the client to the group chatId for receiving updates
   subscriptions.subscribe(chatId, ws);
+  // Subscribe to grouptalk chatIds so inter-bot mb talk calls are visible
+  for (const member of group.members) {
+    subscriptions.subscribe(`grouptalk-${groupId}-${member}`, ws);
+  }
 
   logger.info({ groupId, targetBot, chatId, botChatId, promptLength: prompt.length }, 'Group chat request');
 
@@ -515,6 +584,7 @@ async function handleGroupChat(
       userId: 'web',
       sendCards: false,
       groupMembers: group.members,
+      groupId,
       onUpdate: (state: CardState, bridgeMessageId: string, final: boolean) => {
         if (ws.readyState !== WebSocket.OPEN) return;
         const msgId = clientMessageId || bridgeMessageId;
