@@ -4,6 +4,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { IconMic, IconPhoneOff } from './icons';
+import type { ChatMessage } from '../../types';
 import styles from '../ChatView.module.css';
 
 type RtcCallPhase = 'connecting' | 'connected' | 'ended' | 'error';
@@ -12,6 +13,8 @@ interface RtcCallOverlayProps {
   activeBotName: string | null;
   activeSessionId: string | null;
   token: string | null;
+  /** Current session messages — used to build context for voice agent */
+  messages?: ChatMessage[];
   /** Called with formatted transcript text when a call ends (for injecting into chat) */
   onTranscript?: (text: string) => void;
 }
@@ -97,7 +100,26 @@ function parseSubtitle(buffer: ArrayBuffer): SubtitleData | null {
 
 /* ---- Hook ---- */
 
-export function useRtcCallMode({ activeBotName, activeSessionId, token, onTranscript }: RtcCallOverlayProps) {
+/** Build a concise chat context from recent messages (user + final AI response only, no tool calls) */
+function buildChatContext(messages: ChatMessage[], botName: string | null, maxRounds = 8): string {
+  // Extract user messages and assistant final responses
+  const turns: string[] = [];
+  for (const msg of messages) {
+    if (msg.type === 'user' && msg.text) {
+      turns.push(`User: ${msg.text}`);
+    } else if (msg.type === 'assistant') {
+      // Use responseText from CardState (final response, no tool calls)
+      const text = msg.state?.responseText || msg.text;
+      if (text) turns.push(`AI: ${text}`);
+    }
+  }
+  // Take last N turns
+  const recent = turns.slice(-maxRounds * 2);
+  if (recent.length === 0) return '';
+  return recent.join('\n');
+}
+
+export function useRtcCallMode({ activeBotName, activeSessionId, token, messages, onTranscript }: RtcCallOverlayProps) {
   const [callActive, setCallActive] = useState(false);
   const [callPhase, setCallPhase] = useState<RtcCallPhase>('connecting');
   const [callStartTime, setCallStartTime] = useState(0);
@@ -289,11 +311,17 @@ export function useRtcCallMode({ activeBotName, activeSessionId, token, onTransc
       const VERTC = sdk.default;
 
       // Call server to create RTC room + AI agent
-      // System prompt is built server-side from botName; only pass if custom
       const params: Record<string, string> = {};
       params.welcomeMessage = '你好，有什么可以帮你的吗？';
       if (activeSessionId) params.chatId = activeSessionId;
       if (activeBotName) params.botName = activeBotName;
+
+      // Build system prompt with chat context from current session
+      const chatContext = messages ? buildChatContext(messages, activeBotName) : '';
+      if (chatContext) {
+        const botLabel = activeBotName || 'AI 助手';
+        params.systemPrompt = `你是 ${botLabel}。用用户说的语言回答。简洁、自然地对话。\n\n以下是你和用户之前的文字聊天记录，请基于这些上下文继续对话：\n\n${chatContext}`;
+      }
 
       const res = await fetch('/api/rtc/start', {
         method: 'POST',

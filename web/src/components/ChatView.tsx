@@ -129,7 +129,7 @@ export function ChatView() {
     autoScrollRef.current = true;
   }, [activeSessionId, activeBotName, createSession, addMessage, send]);
 
-  const rtcCall = useRtcCallMode({ activeBotName, activeSessionId, token, onTranscript: handleRtcTranscript });
+  const rtcCall = useRtcCallMode({ activeBotName, activeSessionId, token, messages, onTranscript: handleRtcTranscript });
 
   // ── Incoming voice call from agent ──
   const incomingVoiceCall = useStore((s) => s.incomingVoiceCall);
