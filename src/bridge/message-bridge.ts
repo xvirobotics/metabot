@@ -105,7 +105,9 @@ export class MessageBridge {
     if (task.questionTimeoutId) clearTimeout(task.questionTimeoutId);
     task.executionHandle.finish();
     task.abortController.abort();
-    this.runningTasks.delete(chatId);
+    // Don't delete from runningTasks here — the finally block in executeQuery will
+    // handle cleanup. Deleting early creates a race: if the user sends a new message
+    // before the old loop exits, the old finally block would delete the NEW task entry.
   }
 
   private processQueue(chatId: string): void {
@@ -404,10 +406,14 @@ export class MessageBridge {
           break;
         }
 
-        // Throttled card update for non-final states
-        rateLimiter.schedule(() => {
-          this.sender.updateCard(messageId, state);
-        });
+        // Throttled card update for non-final states (skip if aborted)
+        if (!abortController.signal.aborted) {
+          rateLimiter.schedule(() => {
+            if (!abortController.signal.aborted) {
+              this.sender.updateCard(messageId, state);
+            }
+          });
+        }
       }
 
       await rateLimiter.cancelAndWait();
@@ -452,7 +458,11 @@ export class MessageBridge {
           const newSid = processor.getSessionId();
           if (newSid) this.sessionManager.setSessionId(chatId, newSid);
           if (state.status === 'complete' || state.status === 'error') break;
-          rateLimiter.schedule(() => { this.sender.updateCard(messageId, state); });
+          if (!abortController.signal.aborted) {
+            rateLimiter.schedule(() => {
+              if (!abortController.signal.aborted) this.sender.updateCard(messageId, state);
+            });
+          }
         }
         await rateLimiter.cancelAndWait();
       }
@@ -555,9 +565,12 @@ export class MessageBridge {
         clearTimeout(runningTask.questionTimeoutId);
       }
       try { executionHandle.finish(); } catch (e) { this.logger.warn({ err: e, chatId }, 'Error finishing execution handle'); }
-      this.runningTasks.delete(chatId);
-      metrics.setGauge('metabot_active_tasks', this.runningTasks.size);
-      this.processQueue(chatId);
+      // Only delete if this is still our task (guards against stopTask race condition)
+      if (this.runningTasks.get(chatId) === runningTask) {
+        this.runningTasks.delete(chatId);
+        metrics.setGauge('metabot_active_tasks', this.runningTasks.size);
+        this.processQueue(chatId);
+      }
       if (imagePath) {
         try { fs.unlinkSync(imagePath); } catch { /* ignore */ }
       }
