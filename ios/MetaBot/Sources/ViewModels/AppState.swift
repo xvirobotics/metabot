@@ -23,6 +23,10 @@ final class AppState {
     // Groups
     var groups: [ChatGroup] = []
 
+    // RTC Voice Call
+    var rtcAvailable = false
+    var incomingVoiceCall: IncomingVoiceCall?
+
     // Sessions
     var sessions: [String: ChatSession] = [:] {
         didSet { debounceSave() }
@@ -69,6 +73,9 @@ final class AppState {
         // Configure push service and request permission
         pushService.configure(serverURL: serverURL, token: token)
         Task { await pushService.requestPermission() }
+
+        // Check RTC availability
+        Task { await checkRtcAvailability() }
     }
 
     func disconnect() {
@@ -140,6 +147,9 @@ final class AppState {
                 )
                 addMessage(chatId: chatId, message: msg)
             }
+
+        case .voiceCall(let call):
+            incomingVoiceCall = call
 
         case .groupCreated(let group):
             groups.append(group)
@@ -334,6 +344,37 @@ final class AppState {
     var isRunning: Bool {
         guard let session = activeSession, let last = session.messages.last else { return false }
         return last.type == .assistant && (last.state?.status == .thinking || last.state?.status == .running)
+    }
+
+    // MARK: - RTC Voice Call
+
+    func checkRtcAvailability() async {
+        guard let token = auth.token else { return }
+        let api = RtcAPIService(serverURL: serverURL, token: token)
+        if let config = try? await api.checkConfig() {
+            await MainActor.run { rtcAvailable = config.configured }
+        }
+    }
+
+    /// Build a concise chat context from recent messages (user text + AI final response only, no tool calls)
+    func buildChatContext(forSession sessionId: String, maxRounds: Int = 8) -> String {
+        guard let session = sessions[sessionId] else { return "" }
+        var turns: [String] = []
+        for msg in session.messages {
+            if msg.type == .user, !msg.text.isEmpty {
+                turns.append("User: \(msg.text)")
+            } else if msg.type == .assistant {
+                let text = msg.state?.responseText ?? msg.text
+                if !text.isEmpty { turns.append("AI: \(text)") }
+            }
+        }
+        let recent = turns.suffix(maxRounds * 2)
+        return recent.joined(separator: "\n")
+    }
+
+    /// Inject RTC call transcript into chat as a message for Claude to process
+    func injectRtcTranscript(_ transcriptText: String) {
+        sendMessage(text: transcriptText)
     }
 
     // MARK: - Persistence

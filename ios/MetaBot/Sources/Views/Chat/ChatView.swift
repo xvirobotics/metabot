@@ -4,6 +4,8 @@ struct ChatView: View {
     @Environment(AppState.self) private var appState
     @State private var previewFile: FileAttachment?
     @State private var showPhoneCall = false
+    @State private var showRtcCall = false
+    @State private var incomingCallForRtc: IncomingVoiceCall?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,7 +23,11 @@ struct ChatView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    showPhoneCall = true
+                    if appState.rtcAvailable {
+                        showRtcCall = true
+                    } else {
+                        showPhoneCall = true
+                    }
                 } label: {
                     Image(systemName: "phone.fill")
                         .font(.system(size: 14))
@@ -37,6 +43,22 @@ struct ChatView: View {
                 let chatId = appState.activeSessionId ?? "call_\(UUID().uuidString.prefix(8))"
                 PhoneCallView(botName: botName, chatId: chatId)
                     .environment(appState)
+            }
+        }
+        .fullScreenCover(isPresented: $showRtcCall) {
+            if let botName = appState.activeBotName {
+                let chatId = appState.activeSessionId ?? "call_\(UUID().uuidString.prefix(8))"
+                RtcCallView(botName: botName, chatId: chatId, incoming: incomingCallForRtc)
+                    .environment(appState)
+                    .onDisappear { incomingCallForRtc = nil }
+            }
+        }
+        .onChange(of: appState.incomingVoiceCall?.sessionId) { _, newValue in
+            if let call = appState.incomingVoiceCall, newValue != nil {
+                // Auto-show RTC call for incoming agent-initiated calls
+                incomingCallForRtc = call
+                appState.incomingVoiceCall = nil
+                showRtcCall = true
             }
         }
     }

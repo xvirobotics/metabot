@@ -60,11 +60,25 @@ enum ServerMessage {
     case error(chatId: String, messageId: String?, error: String)
     case file(chatId: String, url: String, name: String, mimeType: String, size: Int?)
     case notice(text: String?, chatId: String?, title: String?, content: String?)
+    case voiceCall(IncomingVoiceCall)
     case groupCreated(group: ChatGroup)
     case groupDeleted(groupId: String)
     case groupsList(groups: [ChatGroup])
     case pong
     case unknown(type: String)
+}
+
+/// Incoming RTC voice call info pushed from server via WebSocket
+struct IncomingVoiceCall {
+    let sessionId: String
+    let roomId: String
+    let token: String
+    let appId: String
+    let userId: String
+    let aiUserId: String
+    let chatId: String
+    let botName: String
+    let prompt: String?
 }
 
 extension ServerMessage: Decodable {
@@ -118,6 +132,19 @@ extension ServerMessage: Decodable {
         case "groups_list":
             let groups = try container.decode([ChatGroup].self, forKey: .key("groups"))
             self = .groupsList(groups: groups)
+        case "voice_call":
+            let call = IncomingVoiceCall(
+                sessionId: try container.decode(String.self, forKey: .key("sessionId")),
+                roomId: try container.decode(String.self, forKey: .key("roomId")),
+                token: try container.decode(String.self, forKey: .key("token")),
+                appId: try container.decode(String.self, forKey: .key("appId")),
+                userId: try container.decode(String.self, forKey: .key("userId")),
+                aiUserId: try container.decode(String.self, forKey: .key("aiUserId")),
+                chatId: try container.decode(String.self, forKey: .key("chatId")),
+                botName: try container.decode(String.self, forKey: .key("botName")),
+                prompt: try container.decodeIfPresent(String.self, forKey: .key("prompt"))
+            )
+            self = .voiceCall(call)
         case "pong":
             self = .pong
         default:
