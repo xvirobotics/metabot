@@ -12,6 +12,117 @@ const STATUS_CONFIG: Record<CardStatus, { color: string; title: string; icon: st
 
 const MAX_CONTENT_LENGTH = 28000;
 
+/**
+ * Parse a Markdown table block into headers and rows.
+ * Returns null if the text is not a valid Markdown table.
+ */
+function parseMarkdownTable(block: string): { headers: string[]; rows: string[][] } | null {
+  const lines = block.trim().split('\n');
+  if (lines.length < 2) return null;
+
+  // Header row must contain pipes
+  const headerLine = lines[0].trim();
+  if (!headerLine.includes('|')) return null;
+
+  // Second line must be the separator (dashes and pipes)
+  const sepLine = lines[1].trim();
+  if (!/^[\s|:-]+$/.test(sepLine)) return null;
+
+  const parseCells = (line: string): string[] =>
+    line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+
+  const headers = parseCells(headerLine);
+  if (headers.length === 0) return null;
+
+  const rows: string[][] = [];
+  for (let i = 2; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line || !line.includes('|')) continue;
+    rows.push(parseCells(line));
+  }
+
+  return { headers, rows };
+}
+
+/**
+ * Convert a parsed Markdown table into a Feishu card table element.
+ * Uses the Feishu card v2 table component with column_list and rows.
+ */
+function buildFeishuTableElement(table: { headers: string[]; rows: string[][] }): unknown {
+  const columns = table.headers.map((h, i) => ({
+    name: `col_${i}`,
+    display_name: h,
+    data_type: 'text' as const,
+    width: 'auto' as const,
+  }));
+
+  const rows = table.rows.map((row) => {
+    const obj: Record<string, string> = {};
+    table.headers.forEach((_, i) => {
+      obj[`col_${i}`] = row[i] ?? '';
+    });
+    return obj;
+  });
+
+  return {
+    tag: 'table',
+    page_size: rows.length,
+    row_height: 'low',
+    header_style: {
+      text_align: 'left',
+      text_size: 'normal',
+      background_style: 'grey',
+      bold: true,
+      lines: 1,
+    },
+    columns,
+    rows,
+  };
+}
+
+/**
+ * Split Markdown text into segments: plain markdown and table elements.
+ * Tables are detected and converted to Feishu card table components.
+ * Returns an array of card elements (markdown or table).
+ */
+function splitMarkdownWithTables(text: string): unknown[] {
+  const elements: unknown[] = [];
+
+  // Match table blocks: lines starting with | that include a separator row
+  const tableRegex = /(?:^|\n)((?:\|[^\n]+\|?\n)(?:\|[\s:|-]+\|?\n)(?:(?:\|[^\n]+\|?\n?)*))/g;
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(tableRegex)) {
+    const tableBlock = match[1];
+    const matchStart = match.index! + (match[0].startsWith('\n') ? 1 : 0);
+
+    // Add preceding text as markdown
+    const before = text.slice(lastIndex, matchStart).trim();
+    if (before) {
+      elements.push({ tag: 'markdown', content: truncateContent(before) });
+    }
+
+    // Try to parse and convert the table
+    const parsed = parseMarkdownTable(tableBlock);
+    if (parsed && parsed.headers.length > 0 && parsed.rows.length > 0) {
+      elements.push(buildFeishuTableElement(parsed));
+    } else {
+      // Fallback: keep as markdown (code block)
+      elements.push({ tag: 'markdown', content: '```\n' + tableBlock.trim() + '\n```' });
+    }
+
+    lastIndex = matchStart + tableBlock.length;
+  }
+
+  // Add remaining text
+  const remaining = text.slice(lastIndex).trim();
+  if (remaining) {
+    elements.push({ tag: 'markdown', content: truncateContent(remaining) });
+  }
+
+  return elements;
+}
+
 function truncateContent(text: string, maxLen: number = MAX_CONTENT_LENGTH): string {
   if (text.length <= maxLen) return text;
   const half = Math.floor(maxLen / 2) - 50;
@@ -128,12 +239,9 @@ export function buildCard(state: CardState): string {
     });
   }
 
-  // Response content
+  // Response content — convert Markdown tables to Feishu table components
   if (state.responseText) {
-    elements.push({
-      tag: 'markdown',
-      content: truncateContent(state.responseText),
-    });
+    elements.push(...splitMarkdownWithTables(state.responseText));
   } else if (state.status === 'thinking') {
     elements.push({
       tag: 'markdown',
