@@ -155,6 +155,8 @@ export class ClaudeExecutor {
       includePartialMessages: true,
       // Load MCP servers and settings from user/project config files
       settingSources: ['user', 'project'],
+      // Auto-approve all MCP servers from .mcp.json (SDK mode has no interactive approval)
+      enableAllProjectMcpServers: true,
       // Cross-platform spawn: custom spawn filters CLAUDE* env vars and uses
       // process.execPath to avoid PATH issues on Windows; fileURLToPath converts
       // file:// URLs to native paths for the SDK CLI entrypoint.
