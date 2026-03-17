@@ -225,10 +225,12 @@ final class RtcVoiceService: NSObject {
     // MARK: - Private: RTC Room
 
     private func joinRtcRoom(info: RtcSessionInfo) async throws {
-        // Configure audio session for voice chat
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
-        try audioSession.setActive(true)
+        // Only configure audio session if CallKit is NOT managing it
+        if CallKitService.shared.activeCallUUID == nil {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+            try audioSession.setActive(true)
+        }
 
         // Create engine
         let engineCfg = ByteRTCEngineConfig()

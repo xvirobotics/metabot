@@ -326,11 +326,15 @@ struct RtcCallView: View {
         Task {
             let transcriptText = await rtcService.endCall()
             if let transcriptText, incoming == nil {
-                // User-initiated call — inject transcript for Claude to process
+                // User-initiated call -- inject transcript for Claude to process
                 appState.injectRtcTranscript(transcriptText, chatId: chatId, botName: botName)
             }
             // For incoming (agent-initiated) calls, the agent already has the
             // transcript via mb voice call --wait response. Don't inject.
+
+            // Notify CallKit that call ended
+            CallKitService.shared.endCurrentCall()
+
             cleanup()
             dismiss()
         }

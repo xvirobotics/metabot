@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PushKit
 import UIKit
 import UserNotifications
 
@@ -10,12 +11,14 @@ import UserNotifications
 @Observable
 final class PushNotificationService: NSObject {
     private(set) var deviceToken: String?
+    private(set) var voipToken: String?
     private(set) var permissionGranted = false
 
     private var serverURL: String = ""
     private var authToken: String = ""
     /// chatIds registered for push on this device
     private var registeredChatIds = Set<String>()
+    private var voipRegistry: PKPushRegistry?
 
     // MARK: - Permission & Registration
 
@@ -52,6 +55,12 @@ final class PushNotificationService: NSObject {
                 if granted {
                     UIApplication.shared.registerForRemoteNotifications()
                 }
+
+                // Register for VoIP push (PushKit)
+                let registry = PKPushRegistry(queue: .main)
+                registry.delegate = self
+                registry.desiredPushTypes = [.voIP]
+                self.voipRegistry = registry
             }
         } catch {
             print("[Push] Permission error: \(error)")
@@ -88,8 +97,12 @@ final class PushNotificationService: NSObject {
     func registerForChat(chatId: String) {
         guard !chatId.isEmpty else { return }
         registeredChatIds.insert(chatId)
-        guard deviceToken != nil else { return }
-        registerWithServer(chatId: chatId)
+        if deviceToken != nil {
+            registerWithServer(chatId: chatId)
+        }
+        if voipToken != nil {
+            registerVoIPTokenWithServer(chatId: chatId)
+        }
     }
 
     /// Unregister this device from all push notifications (e.g., on logout).
@@ -147,5 +160,75 @@ final class PushNotificationService: NSObject {
                 print("[Push] Registered for chat: \(chatId.prefix(16))")
             }
         }.resume()
+    }
+
+    private func registerVoIPTokenWithServer(chatId: String) {
+        guard let voipToken, !serverURL.isEmpty else { return }
+        guard let url = URL(string: "\(serverURL)/api/devices/register") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "deviceToken": voipToken,
+            "chatId": chatId,
+            "tokenType": "voip",
+        ])
+
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            if let error {
+                print("[Push] VoIP register error: \(error.localizedDescription)")
+            } else if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                print("[Push] VoIP registered for chat: \(chatId.prefix(16))")
+            }
+        }.resume()
+    }
+}
+
+// MARK: - PKPushRegistryDelegate
+
+extension PushNotificationService: PKPushRegistryDelegate {
+    func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
+        guard type == .voIP else { return }
+        let token = pushCredentials.token.map { String(format: "%02.2hhx", $0) }.joined()
+        print("[Push] VoIP token: \(token.prefix(16))...")
+        voipToken = token
+        // Register VoIP token for all known chatIds
+        for chatId in registeredChatIds {
+            registerVoIPTokenWithServer(chatId: chatId)
+        }
+    }
+
+    func pushRegistry(
+        _ registry: PKPushRegistry,
+        didReceiveIncomingPushWith payload: PKPushPayload,
+        for type: PKPushType,
+        completion: @escaping () -> Void
+    ) {
+        guard type == .voIP else { completion(); return }
+        let data = payload.dictionaryPayload
+
+        let call = IncomingVoiceCall(
+            sessionId: data["sessionId"] as? String ?? "",
+            roomId: data["roomId"] as? String ?? "",
+            token: data["token"] as? String ?? "",
+            appId: data["appId"] as? String ?? "",
+            userId: data["userId"] as? String ?? "",
+            aiUserId: data["aiUserId"] as? String ?? "",
+            chatId: data["chatId"] as? String ?? "",
+            botName: data["botName"] as? String ?? "Voice Call",
+            prompt: data["prompt"] as? String
+        )
+
+        // Report to CallKit immediately (Apple enforces a ~5-second deadline)
+        CallKitService.shared.reportIncomingCall(call: call) { _ in
+            completion()
+        }
+    }
+
+    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+        guard type == .voIP else { return }
+        voipToken = nil
     }
 }

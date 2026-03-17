@@ -50,7 +50,8 @@ export async function handleBotRoutes(
       jsonResponse(res, 400, { error: 'Missing required fields: deviceToken, chatId' });
       return true;
     }
-    deviceStore.register(chatId, deviceToken);
+    const tokenType = (body.tokenType as 'alert' | 'voip') || 'alert';
+    deviceStore.register(chatId, deviceToken, tokenType);
     jsonResponse(res, 200, { registered: true });
     return true;
   }

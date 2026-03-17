@@ -102,6 +102,33 @@ export class PushService {
 
   /** Notify for incoming RTC voice call */
   async notifyIncomingCall(chatId: string, botName: string, callData?: Record<string, string>): Promise<void> {
+    // Try VoIP push first (triggers native CallKit UI)
+    const voipTokens = this.deviceStore.getVoIPTokens(chatId);
+    if (voipTokens.length > 0) {
+      const voipPayload = {
+        sessionId: callData?.sessionId ?? '',
+        roomId: callData?.roomId ?? '',
+        token: callData?.token ?? '',
+        appId: callData?.appId ?? '',
+        userId: callData?.userId ?? '',
+        aiUserId: callData?.aiUserId ?? '',
+        chatId,
+        botName,
+        type: 'incoming_call',
+      };
+
+      const results = await Promise.allSettled(
+        voipTokens.map((token) => this.sendVoIPPush(token, voipPayload)),
+      );
+      let sent = 0;
+      for (const r of results) { if (r.status === 'fulfilled' && r.value) sent++; }
+      if (sent > 0) {
+        this.logger.info({ chatId, sent, total: voipTokens.length }, 'VoIP push sent');
+        return; // VoIP push sent, don't also send regular push
+      }
+    }
+
+    // Fallback: regular APNs push (for older app versions without CallKit)
     const tokens = this.deviceStore.getTokens(chatId);
     if (tokens.length === 0) return;
 
@@ -122,6 +149,61 @@ export class PushService {
     }
     if (sent > 0 || failed > 0) {
       this.logger.info({ chatId, sent, failed }, 'Incoming call push sent');
+    }
+  }
+
+  /** Send VoIP push notification — triggers CallKit on iOS. */
+  async sendVoIPPush(
+    deviceToken: string,
+    payload: Record<string, unknown>,
+  ): Promise<boolean> {
+    try {
+      const session = this.getSession();
+      const jwt = this.getJWT();
+
+      const headers = {
+        [http2.constants.HTTP2_HEADER_METHOD]: 'POST',
+        [http2.constants.HTTP2_HEADER_PATH]: `/3/device/${deviceToken}`,
+        'authorization': `bearer ${jwt}`,
+        'apns-topic': `${this.config.bundleId}.voip`,
+        'apns-push-type': 'voip',
+        'apns-priority': '10',
+        'apns-expiration': '0',
+      };
+
+      const body = JSON.stringify(payload);
+
+      return await new Promise<boolean>((resolve) => {
+        const req = session.request(headers);
+        let status = 0;
+        let responseData = '';
+
+        req.on('response', (responseHeaders) => {
+          status = Number(responseHeaders[http2.constants.HTTP2_HEADER_STATUS]) || 0;
+        });
+        req.on('data', (chunk: Buffer) => { responseData += chunk.toString(); });
+        req.on('end', () => {
+          if (status === 200) {
+            resolve(true);
+          } else if (status === 410) {
+            this.logger.info({ tokenPrefix: deviceToken.slice(0, 8) }, 'VoIP token expired, removing');
+            this.deviceStore.removeToken(deviceToken);
+            resolve(false);
+          } else {
+            this.logger.warn({ status, response: responseData }, 'VoIP push failed');
+            resolve(false);
+          }
+        });
+        req.on('error', (err) => {
+          this.logger.warn({ err }, 'VoIP push request error');
+          resolve(false);
+        });
+        req.end(body);
+        req.setTimeout(10_000, () => { req.close(); resolve(false); });
+      });
+    } catch (err) {
+      this.logger.warn({ err }, 'VoIP push exception');
+      return false;
     }
   }
 

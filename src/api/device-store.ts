@@ -2,16 +2,21 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Logger } from '../utils/logger.js';
 
+interface DeviceEntry {
+  alert: Set<string>;
+  voip: Set<string>;
+}
+
 interface StoredData {
-  registrations: Array<{ chatId: string; deviceToken: string; registeredAt: number }>;
+  registrations: Array<{ chatId: string; deviceToken: string; tokenType?: 'alert' | 'voip'; registeredAt: number }>;
 }
 
 /**
  * JSON file-based store for APNs device tokens.
- * Maps chatId → Set<deviceToken> for push notification delivery.
+ * Maps chatId → DeviceEntry (alert + voip token sets) for push notification delivery.
  */
 export class DeviceStore {
-  private store = new Map<string, Set<string>>();
+  private store = new Map<string, DeviceEntry>();
   private filePath: string;
   private logger: Logger;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -23,27 +28,27 @@ export class DeviceStore {
   }
 
   /** Register a device token for a chatId. */
-  register(chatId: string, deviceToken: string): void {
-    let set = this.store.get(chatId);
-    if (!set) {
-      set = new Set();
-      this.store.set(chatId, set);
+  register(chatId: string, deviceToken: string, tokenType: 'alert' | 'voip' = 'alert'): void {
+    let entry = this.store.get(chatId);
+    if (!entry) {
+      entry = { alert: new Set(), voip: new Set() };
+      this.store.set(chatId, entry);
     }
+    const set = entry[tokenType];
     if (!set.has(deviceToken)) {
       set.add(deviceToken);
       this.scheduleSave();
-      this.logger.debug({ chatId, tokenPrefix: deviceToken.slice(0, 8) }, 'Device token registered');
+      this.logger.debug({ chatId, tokenPrefix: deviceToken.slice(0, 8), tokenType }, 'Device token registered');
     }
   }
 
-  /** Unregister a device token from all chatIds. */
+  /** Unregister a device token from all chatIds (both alert and voip sets). */
   unregister(deviceToken: string): void {
     let removed = false;
-    for (const [chatId, set] of this.store) {
-      if (set.delete(deviceToken)) {
-        removed = true;
-        if (set.size === 0) this.store.delete(chatId);
-      }
+    for (const [chatId, entry] of this.store) {
+      if (entry.alert.delete(deviceToken)) removed = true;
+      if (entry.voip.delete(deviceToken)) removed = true;
+      if (entry.alert.size === 0 && entry.voip.size === 0) this.store.delete(chatId);
     }
     if (removed) {
       this.scheduleSave();
@@ -56,10 +61,16 @@ export class DeviceStore {
     this.unregister(deviceToken);
   }
 
-  /** Get all device tokens registered for a chatId. */
+  /** Get alert device tokens registered for a chatId (backward compatible). */
   getTokens(chatId: string): string[] {
-    const set = this.store.get(chatId);
-    return set ? [...set] : [];
+    const entry = this.store.get(chatId);
+    return entry ? [...entry.alert] : [];
+  }
+
+  /** Get VoIP device tokens registered for a chatId. */
+  getVoIPTokens(chatId: string): string[] {
+    const entry = this.store.get(chatId);
+    return entry ? [...entry.voip] : [];
   }
 
   /** Get all registered chatIds (for debugging). */
@@ -73,12 +84,13 @@ export class DeviceStore {
         const raw = fs.readFileSync(this.filePath, 'utf-8');
         const data: StoredData = JSON.parse(raw);
         for (const reg of data.registrations) {
-          let set = this.store.get(reg.chatId);
-          if (!set) {
-            set = new Set();
-            this.store.set(reg.chatId, set);
+          let entry = this.store.get(reg.chatId);
+          if (!entry) {
+            entry = { alert: new Set(), voip: new Set() };
+            this.store.set(reg.chatId, entry);
           }
-          set.add(reg.deviceToken);
+          const tokenType = reg.tokenType || 'alert';
+          entry[tokenType].add(reg.deviceToken);
         }
         this.logger.info({ chatIds: this.store.size }, 'Device tokens loaded');
       }
@@ -101,9 +113,12 @@ export class DeviceStore {
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
       const registrations: StoredData['registrations'] = [];
-      for (const [chatId, tokens] of this.store) {
-        for (const deviceToken of tokens) {
-          registrations.push({ chatId, deviceToken, registeredAt: Date.now() });
+      for (const [chatId, entry] of this.store) {
+        for (const deviceToken of entry.alert) {
+          registrations.push({ chatId, deviceToken, tokenType: 'alert', registeredAt: Date.now() });
+        }
+        for (const deviceToken of entry.voip) {
+          registrations.push({ chatId, deviceToken, tokenType: 'voip', registeredAt: Date.now() });
         }
       }
       fs.writeFileSync(this.filePath, JSON.stringify({ registrations }, null, 2));

@@ -34,6 +34,7 @@ targets:
         UIBackgroundModes:
           - audio
           - remote-notification
+          - voip
         NSMicrophoneUsageDescription: "MetaBot uses the microphone for voice input and voice calls."
         NSSpeechRecognitionUsageDescription: "MetaBot uses speech recognition to convert your voice to text."
         NSCameraUsageDescription: "MetaBot uses the camera to capture and share photos."
@@ -45,6 +46,7 @@ targets:
       path: MetaBot.entitlements
       properties:
         aps-environment: development
+        com.apple.developer.networking.voip: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.xvirobotics.MetaBot
@@ -61,6 +63,8 @@ targets:
       - package: swift-markdown-ui
         product: MarkdownUI
       - sdk: AVFoundation.framework
+      - sdk: CallKit.framework
+      - sdk: PushKit.framework
       - sdk: Speech.framework
       - sdk: UserNotifications.framework
     scheme:
