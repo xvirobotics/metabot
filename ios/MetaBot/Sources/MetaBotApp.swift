@@ -10,8 +10,16 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        // Set delegate early so cold-launch notification taps are handled
         UNUserNotificationCenter.current().delegate = self
+        // Cold launch via Quick Action
+        if let shortcutItem = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
+            let prefix = "com.xvirobotics.MetaBot.call."
+            if shortcutItem.type.hasPrefix(prefix) {
+                let botName = String(shortcutItem.type.dropFirst(prefix.count))
+                print("[App] Quick Action (didFinishLaunching): \(botName)")
+                AppDelegate.pendingQuickAction = botName
+            }
+        }
         return true
     }
 
@@ -83,27 +91,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         if shortcutItem.type.hasPrefix(prefix) {
             let botName = String(shortcutItem.type.dropFirst(prefix.count))
             print("[App] Quick Action (running): \(botName)")
+            AppDelegate.pendingQuickAction = botName
             NotificationCenter.default.post(name: .quickActionCall, object: nil, userInfo: ["botName": botName])
         }
         completionHandler(true)
-    }
-
-    /// Called on cold launch with Quick Action
-    func application(
-        _ application: UIApplication,
-        configurationForConnecting connectingSceneSession: UISceneSession,
-        options: UIScene.ConnectionOptions
-    ) -> UISceneConfiguration {
-        if let shortcutItem = options.shortcutItem {
-            let prefix = "com.xvirobotics.MetaBot.call."
-            if shortcutItem.type.hasPrefix(prefix) {
-                let botName = String(shortcutItem.type.dropFirst(prefix.count))
-                print("[App] Quick Action (cold launch): \(botName)")
-                AppDelegate.pendingQuickAction = botName
-            }
-        }
-        let config = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
-        return config
     }
 }
 
