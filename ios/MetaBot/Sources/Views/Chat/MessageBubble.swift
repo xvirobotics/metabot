@@ -38,7 +38,9 @@ struct MessageBubble: View {
                 if !message.text.isEmpty {
                     Text(message.text)
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color(UIColor { traits in
+                            traits.userInterfaceStyle == .dark ? .white : UIColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 1)
+                        }))
                         .lineSpacing(4)
                         .tracking(-0.1)
                         .fixedSize(horizontal: false, vertical: true)
