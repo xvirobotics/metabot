@@ -116,7 +116,7 @@ export async function handleRtcRoutes(
 
       const result = await rtcService.startVoiceChat({
         systemPrompt,
-        welcomeMessage: (body.welcomeMessage as string | undefined) || prompt || '你好，有什么可以帮你的吗？',
+        welcomeMessage: (body.welcomeMessage as string | undefined) || '你好，有什么可以帮你的吗？',
         chatId,
         botName,
         prompt,
