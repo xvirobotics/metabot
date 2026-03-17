@@ -37,7 +37,7 @@ struct MessageBubble: View {
                 // Text
                 if !message.text.isEmpty {
                     Text(message.text)
-                        .font(.system(size: NexusFontScale.scaled(14), weight: .medium))
+                        .font(NexusTypography.body)
                         .foregroundStyle(Color(UIColor { traits in
                             traits.userInterfaceStyle == .dark ? .white : UIColor(red: 0.1, green: 0.1, blue: 0.12, alpha: 1)
                         }))

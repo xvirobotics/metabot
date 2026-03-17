@@ -6,7 +6,7 @@ extension MarkdownUI.Theme {
         Theme()
         .text {
             ForegroundColor(NexusColors.text0)
-            FontSize(NexusFontScale.scaled(14))
+            FontSize(NexusFontScale.scaled(15))
         }
         .code {
             FontFamilyVariant(.monospaced)
