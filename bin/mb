@@ -244,47 +244,6 @@ print(json.dumps(body))
         ;;
     esac
     ;;
-  # --- Phone Call (legacy) ---
-  call|c)
-    phone="${1:-}"
-    shift 2>/dev/null || true
-
-    # If no phone, use TWILIO_CALLBACK_NUMBER from .env
-    if [[ -z "$phone" ]]; then
-      phone=$(sed -n 's/^TWILIO_CALLBACK_NUMBER=//p' "$METABOT_ENV" 2>/dev/null || true)
-      if [[ -z "$phone" ]]; then
-        echo "Usage: mb call <phone> [message]"
-        echo "       mb call <phone> -b <botName>"
-        echo "       mb call <phone> --chat <chatId>"
-        echo "       mb call                  (uses TWILIO_CALLBACK_NUMBER)"
-        exit 1
-      fi
-    fi
-
-    # Parse optional flags
-    _bot=""
-    _chat=""
-    _msg=""
-    while [[ $# -gt 0 ]]; do
-      case "$1" in
-        -b|--bot)   _bot="$2"; shift 2 ;;
-        --chat)     _chat="$2"; shift 2 ;;
-        *)          _msg="${_msg:+$_msg }$1"; shift ;;
-      esac
-    done
-
-    python3 -c "
-import json, sys
-p = {'phone': sys.argv[1]}
-if sys.argv[2]: p['message'] = sys.argv[2]
-if sys.argv[3]: p['botName'] = sys.argv[3]
-if sys.argv[4]: p['chatId'] = sys.argv[4]
-print(json.dumps(p))
-" "$phone" "$_msg" "$_bot" "$_chat" | \
-    curl -s -X POST "$METABOT_URL/api/call" \
-      -H "$METABOT_AUTH" -H "Content-Type: application/json" \
-      -d @- | _json
-    ;;
   # --- Health ---
   health|h)
     curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/health" | _json
@@ -481,8 +440,6 @@ print(json.dumps(body))
     echo "    mb voice config                  - Check RTC configuration"
     echo "    mb voice tts \"text\" [--play] [-o f] - Text-to-speech (saves MP3)"
     echo ""
-    echo "  Phone Call (legacy):"
-    echo "    mb call <phone> [message]        - Initiate outbound phone call"
     echo ""
     echo "  Monitoring:"
     echo "    mb stats                         - Cost & usage stats (per-bot, per-user)"
