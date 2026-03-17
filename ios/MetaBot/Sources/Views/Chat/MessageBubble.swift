@@ -37,7 +37,7 @@ struct MessageBubble: View {
                 // Text
                 if !message.text.isEmpty {
                     Text(message.text)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: NexusFontScale.scaled(14), weight: .medium))
                         .foregroundStyle(Color(UIColor { traits in
                             traits.userInterfaceStyle == .dark ? .white : UIColor(red: 0.1, green: 0.1, blue: 0.12, alpha: 1)
                         }))
@@ -111,9 +111,9 @@ struct MessageBubble: View {
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 12))
+                                .font(.system(size: NexusFontScale.scaled(12)))
                             Text("Retry")
-                                .font(NexusTypography.jetBrainsMono(size: 12))
+                                .font(NexusTypography.jetBrainsMono(size: NexusFontScale.scaled(12)))
                         }
                         .foregroundStyle(NexusColors.text2)
                         .padding(.horizontal, 14)
@@ -279,7 +279,7 @@ struct MessageBubble: View {
                 HStack {
                     Spacer()
                     Text(message.text)
-                        .font(.system(size: 12))
+                        .font(.system(size: NexusFontScale.scaled(12)))
                         .foregroundStyle(NexusColors.text2)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 6)

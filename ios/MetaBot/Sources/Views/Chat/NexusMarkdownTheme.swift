@@ -2,14 +2,15 @@ import SwiftUI
 import MarkdownUI
 
 extension MarkdownUI.Theme {
-    static let nexus = Theme()
+    static var nexus: Theme {
+        Theme()
         .text {
             ForegroundColor(NexusColors.text0)
-            FontSize(14)
+            FontSize(NexusFontScale.scaled(14))
         }
         .code {
             FontFamilyVariant(.monospaced)
-            FontSize(13)
+            FontSize(NexusFontScale.scaled(13))
             ForegroundColor(NexusColors.text1)
             BackgroundColor(NexusColors.codeBg)
         }
@@ -35,7 +36,7 @@ extension MarkdownUI.Theme {
                     configuration.label
                         .markdownTextStyle {
                             FontFamilyVariant(.monospaced)
-                            FontSize(13)
+                            FontSize(NexusFontScale.scaled(13))
                             ForegroundColor(NexusColors.text1)
                         }
                         .padding(12)
@@ -51,4 +52,5 @@ extension MarkdownUI.Theme {
         .link {
             ForegroundColor(NexusColors.accent)
         }
+    }
 }

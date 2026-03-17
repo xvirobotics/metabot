@@ -121,7 +121,7 @@ struct InputBar: View {
                 // TextEditor
                 TextField("Ask anything...", text: $text, axis: .vertical)
                     .lineLimit(1...8)
-                    .font(NexusTypography.spaceGrotesk(size: 14))
+                    .font(NexusTypography.body)
                     .foregroundStyle(NexusColors.text0)
                     .frame(minHeight: 24)
                     .focused($isFocused)
@@ -248,12 +248,12 @@ struct InputBar: View {
             // Streaming ASR text
             if !voiceService.transcribedText.isEmpty {
                 Text(voiceService.transcribedText)
-                    .font(NexusTypography.spaceGrotesk(size: 14))
+                    .font(NexusTypography.body)
                     .foregroundStyle(NexusColors.text0)
                     .lineLimit(2)
             } else {
                 Text("Listening...")
-                    .font(NexusTypography.spaceGrotesk(size: 14))
+                    .font(NexusTypography.body)
                     .foregroundStyle(NexusColors.text2)
             }
 
