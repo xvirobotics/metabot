@@ -139,7 +139,7 @@ export class RtcVoiceChatService {
     // TTS
     const ttsAppId = process.env.VOLCENGINE_TTS_APPID || '';
     const ttsAccessKey = process.env.VOLCENGINE_TTS_ACCESS_KEY || '';
-    const ttsVoice = params.ttsVoice || process.env.VOLC_RTC_TTS_VOICE || 'BV001_streaming';
+    const ttsVoice = params.ttsVoice || process.env.VOLC_RTC_TTS_VOICE || 'zh_female_wanwanxiaohe_moon_bigtts';
 
     // Build LLM config — use EndPointId if available, otherwise ModelName
     const llmConfig: Record<string, unknown> = {
