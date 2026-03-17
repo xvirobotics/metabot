@@ -131,6 +131,8 @@ struct MetaBotApp: App {
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .active {
                     appState.handleForegroundReturn()
+                    // Check pending Quick Action / Siri (app was in background)
+                    checkPendingActions()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .navigateToChat)) { notification in
@@ -144,26 +146,28 @@ struct MetaBotApp: App {
                 }
             }
             .task {
-                // Cold launch: check for pending actions (VoIP push, Quick Action, Siri)
+                // Cold launch: wait for WS connection then check pending actions
                 try? await Task.sleep(for: .seconds(1.5))
                 await MainActor.run {
-                    // VoIP push incoming call
                     if let data = AppDelegate.pendingCallData {
                         AppDelegate.pendingCallData = nil
                         appState.incomingVoiceCall = Self.parseCallFromDict(data)
                     }
-                    // Quick Action: outgoing call
-                    if let botName = AppDelegate.pendingQuickAction {
-                        AppDelegate.pendingQuickAction = nil
-                        appState.initiateOutgoingCall(botName: botName)
-                    }
-                    // Siri: outgoing call
-                    if let botName = CallBotIntent.pendingCallBot {
-                        CallBotIntent.pendingCallBot = nil
-                        appState.initiateOutgoingCall(botName: botName)
-                    }
+                    checkPendingActions()
                 }
             }
+        }
+    }
+
+    /// Check and execute any pending Quick Action or Siri intent
+    private func checkPendingActions() {
+        if let botName = AppDelegate.pendingQuickAction {
+            AppDelegate.pendingQuickAction = nil
+            appState.initiateOutgoingCall(botName: botName)
+        }
+        if let botName = CallBotIntent.pendingCallBot {
+            CallBotIntent.pendingCallBot = nil
+            appState.initiateOutgoingCall(botName: botName)
         }
     }
 
