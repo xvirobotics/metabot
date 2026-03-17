@@ -173,13 +173,74 @@ print(json.dumps(p))
       config)
         curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/rtc/config" | _json
         ;;
+      tts)
+        _provider=""
+        _voice=""
+        _output=""
+        _play=false
+        _text=""
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            --provider|-p) _provider="$2"; shift 2 ;;
+            --voice)       _voice="$2"; shift 2 ;;
+            -o|--output)   _output="$2"; shift 2 ;;
+            --play)        _play=true; shift ;;
+            --)            shift; _text="$*"; break ;;
+            -*)            echo "Unknown flag: $1"; exit 1 ;;
+            *)             _text="$*"; break ;;
+          esac
+        done
+        if [[ -z "$_text" ]]; then
+          if [[ -t 0 ]]; then
+            echo "Usage: mb voice tts \"text\" [--play] [-o file.mp3] [--provider doubao|openai|elevenlabs] [--voice <name>]"
+            echo "  Or pipe text: echo 'hello' | mb voice tts"
+            exit 1
+          fi
+          _text="$(cat)"
+        fi
+        _json_body=$(python3 -c "
+import json, sys
+body = {'text': sys.argv[1]}
+if sys.argv[2]: body['provider'] = sys.argv[2]
+if sys.argv[3]: body['voice'] = sys.argv[3]
+print(json.dumps(body))
+" "$_text" "$_provider" "$_voice")
+        if [[ -z "$_output" ]]; then
+          _output="/tmp/mb-voice-$(date +%s).mp3"
+        fi
+        _http_code=$(curl -s -w '%{http_code}' -o "$_output" \
+          -X POST "$METABOT_URL/api/tts" \
+          -H "$METABOT_AUTH" -H "Content-Type: application/json" \
+          -d "$_json_body")
+        if [[ "$_http_code" != "200" ]]; then
+          echo "Error: TTS request failed (HTTP $_http_code)"
+          cat "$_output" 2>/dev/null
+          rm -f "$_output"
+          exit 1
+        fi
+        echo "$_output"
+        if [[ "$_play" == "true" ]]; then
+          if command -v afplay &>/dev/null; then afplay "$_output"
+          elif command -v mpv &>/dev/null; then mpv --no-video "$_output" 2>/dev/null
+          elif command -v ffplay &>/dev/null; then ffplay -nodisp -autoexit "$_output" 2>/dev/null
+          elif command -v play &>/dev/null; then play "$_output" 2>/dev/null
+          else echo "(no audio player found — install mpv, ffplay, or sox to use --play)"
+          fi
+        fi
+        ;;
       *)
-        echo "mb voice - RTC voice calls (real-time Doubao AI)"
+        echo "mb voice - Voice tools"
         echo ""
-        echo "  mb voice call <bot> <chatId> [prompt]  - Start voice call, wait for transcript"
-        echo "  mb voice transcript <sessionId>         - Get call transcript"
-        echo "  mb voice list                           - List active voice sessions"
-        echo "  mb voice config                         - Check RTC configuration"
+        echo "  RTC Voice Call:"
+        echo "    mb voice call <bot> <chatId> [prompt]  - Start voice call, wait for transcript"
+        echo "    mb voice transcript <sessionId>         - Get call transcript"
+        echo "    mb voice list                           - List active voice sessions"
+        echo "    mb voice config                         - Check RTC configuration"
+        echo ""
+        echo "  Text-to-Speech:"
+        echo "    mb voice tts \"text\" [--play] [-o f]    - Generate MP3 from text"
+        echo "    mb voice tts \"text\" --provider doubao   - Use specific TTS provider"
+        echo "    echo 'hello' | mb voice tts              - Read from stdin"
         ;;
     esac
     ;;
@@ -413,11 +474,12 @@ print(json.dumps(body))
     echo "    mb schedule resume <id>          - Resume a paused task"
     echo "    mb schedule cancel <id>          - Cancel a scheduled task"
     echo ""
-    echo "  Voice Call (RTC):"
+    echo "  Voice:"
     echo "    mb voice call <bot> <chatId> [prompt] - Start RTC voice call + wait for transcript"
     echo "    mb voice transcript <sessionId>  - Get call transcript"
     echo "    mb voice list                    - List active voice sessions"
     echo "    mb voice config                  - Check RTC configuration"
+    echo "    mb voice tts \"text\" [--play] [-o f] - Text-to-speech (saves MP3)"
     echo ""
     echo "  Phone Call (legacy):"
     echo "    mb call <phone> [message]        - Initiate outbound phone call"
