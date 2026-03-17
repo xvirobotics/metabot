@@ -326,7 +326,8 @@ struct RtcCallView: View {
         Task {
             let transcriptText = await rtcService.endCall()
             if let transcriptText {
-                appState.injectRtcTranscript(transcriptText)
+                // Use the call's chatId and botName, not whatever is currently active
+                appState.injectRtcTranscript(transcriptText, chatId: chatId, botName: botName)
             }
             cleanup()
             dismiss()

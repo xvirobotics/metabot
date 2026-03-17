@@ -461,7 +461,26 @@ final class AppState {
     }
 
     /// Inject RTC call transcript into chat as a message for Claude to process
-    func injectRtcTranscript(_ transcriptText: String) {
+    func injectRtcTranscript(_ transcriptText: String, chatId: String? = nil, botName: String? = nil) {
+        // Switch to the correct bot and session for this call
+        if let botName {
+            activeBotName = botName
+        }
+        if let chatId {
+            // Ensure session exists for this chatId
+            if sessions[chatId] == nil {
+                let bot = botName ?? activeBotName ?? "default"
+                let session = ChatSession(
+                    id: chatId, botName: bot, title: "", messages: [],
+                    createdAt: Date().timeIntervalSince1970 * 1000,
+                    updatedAt: Date().timeIntervalSince1970 * 1000,
+                    groupId: nil
+                )
+                sessions[chatId] = session
+            }
+            activeSessionId = chatId
+            showingChat = true
+        }
         sendMessage(text: transcriptText)
     }
 
