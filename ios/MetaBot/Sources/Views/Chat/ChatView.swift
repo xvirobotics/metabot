@@ -5,7 +5,6 @@ struct ChatView: View {
     @State private var previewFile: FileAttachment?
     @State private var showPhoneCall = false
     @State private var showRtcCall = false
-    @State private var incomingCallForRtc: IncomingVoiceCall?
 
     // Session header dialogs
     @State private var showRenameDialog = false
@@ -133,17 +132,8 @@ struct ChatView: View {
         .fullScreenCover(isPresented: $showRtcCall) {
             if let botName = appState.activeBotName {
                 let chatId = appState.activeSessionId ?? "call_\(UUID().uuidString.prefix(8))"
-                RtcCallView(botName: botName, chatId: chatId, incoming: incomingCallForRtc)
+                RtcCallView(botName: botName, chatId: chatId, incoming: nil)
                     .environment(appState)
-                    .onDisappear { incomingCallForRtc = nil }
-            }
-        }
-        .onChange(of: appState.incomingVoiceCall?.sessionId) { _, newValue in
-            if let call = appState.incomingVoiceCall, newValue != nil {
-                // Auto-show RTC call for incoming agent-initiated calls
-                incomingCallForRtc = call
-                appState.incomingVoiceCall = nil
-                showRtcCall = true
             }
         }
         // Task 5d: Haptics on task complete / error

@@ -3,6 +3,8 @@ import SwiftUI
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
     @State private var selectedSidebarItem: SidebarItem? = .chats
+    @State private var showIncomingCall = false
+    @State private var incomingCall: IncomingVoiceCall?
 
     enum SidebarItem: Hashable {
         case chats
@@ -54,6 +56,25 @@ struct MainTabView: View {
                     Label("", systemImage: "")
                 }
                 .hidden()
+            }
+        }
+        // Global incoming call listener (iPad)
+        .onChange(of: appState.incomingVoiceCall?.sessionId) { _, newValue in
+            if let call = appState.incomingVoiceCall, newValue != nil {
+                incomingCall = call
+                appState.incomingVoiceCall = nil
+                showIncomingCall = true
+            }
+        }
+        .fullScreenCover(isPresented: $showIncomingCall) {
+            if let call = incomingCall {
+                RtcCallView(
+                    botName: call.botName,
+                    chatId: call.chatId,
+                    incoming: call
+                )
+                .environment(appState)
+                .onDisappear { incomingCall = nil }
             }
         }
     }
@@ -142,15 +163,38 @@ struct MainTabView: View {
 
 struct MobileTabView: View {
     @Environment(AppState.self) private var appState
+    @State private var showIncomingCall = false
+    @State private var incomingCall: IncomingVoiceCall?
 
     var body: some View {
-        if appState.showingChat, appState.activeSession != nil {
-            fullScreenChat
-        } else {
-            if #available(iOS 26, *) {
-                liquidGlassTabView
+        Group {
+            if appState.showingChat, appState.activeSession != nil {
+                fullScreenChat
             } else {
-                legacyTabView
+                if #available(iOS 26, *) {
+                    liquidGlassTabView
+                } else {
+                    legacyTabView
+                }
+            }
+        }
+        // Global incoming call listener — works from any tab/screen
+        .onChange(of: appState.incomingVoiceCall?.sessionId) { _, newValue in
+            if let call = appState.incomingVoiceCall, newValue != nil {
+                incomingCall = call
+                appState.incomingVoiceCall = nil
+                showIncomingCall = true
+            }
+        }
+        .fullScreenCover(isPresented: $showIncomingCall) {
+            if let call = incomingCall {
+                RtcCallView(
+                    botName: call.botName ?? appState.activeBotName ?? "Voice Call",
+                    chatId: call.chatId ?? appState.activeSessionId ?? "call_\(UUID().uuidString.prefix(8))",
+                    incoming: call
+                )
+                .environment(appState)
+                .onDisappear { incomingCall = nil }
             }
         }
     }
