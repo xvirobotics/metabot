@@ -2,15 +2,16 @@ import AVFoundation
 import CallKit
 import Foundation
 import Observation
+import VolcEngineRTC
 
 /// Manages CallKit integration for native incoming call UI.
+/// When a call is answered via CallKit, RTC audio is connected directly here —
+/// no RtcCallView is shown. The native phone UI handles mute/speaker/hangup.
 /// Singleton -- initialized once at app launch.
 @Observable
 final class CallKitService: NSObject {
     static let shared = CallKitService()
 
-    /// The currently active (answered) call, observed by MainTabView to show RtcCallView
-    var activeCall: IncomingVoiceCall?
     /// UUID of the active CallKit call
     private(set) var activeCallUUID: UUID?
 
@@ -18,6 +19,11 @@ final class CallKitService: NSObject {
     private let callController = CXCallController()
     /// Cache: CallKit UUID -> IncomingVoiceCall data (from VoIP push payload)
     private var pendingCalls: [UUID: IncomingVoiceCall] = [:]
+
+    // RTC state for CallKit-managed calls
+    private var rtcEngine: ByteRTCEngine?
+    private var rtcRoom: ByteRTCRoom?
+    private var currentCall: IncomingVoiceCall?
 
     private override init() {
         let config = CXProviderConfiguration(localizedName: "MetaBot")
@@ -58,7 +64,7 @@ final class CallKitService: NSObject {
         }
     }
 
-    /// End the current call (called from RtcCallView when user hangs up)
+    /// End the current call (called when user hangs up)
     func endCurrentCall() {
         guard let uuid = activeCallUUID else { return }
         let action = CXEndCallAction(call: uuid)
@@ -70,8 +76,6 @@ final class CallKitService: NSObject {
     }
 
     /// Report that the call has connected (called after RTC room is joined).
-    /// For incoming calls, the connected state is set when CXAnswerCallAction is fulfilled.
-    /// This sends an update to refresh the call info if needed.
     func reportCallConnected() {
         guard let uuid = activeCallUUID else { return }
         let update = CXCallUpdate()
@@ -83,8 +87,46 @@ final class CallKitService: NSObject {
     func reportCallEnded(reason: CXCallEndedReason = .remoteEnded) {
         guard let uuid = activeCallUUID else { return }
         provider.reportCall(with: uuid, endedAt: Date(), reason: reason)
-        activeCall = nil
+        disconnectRTC()
         activeCallUUID = nil
+    }
+
+    // MARK: - RTC Connection (for CallKit-managed calls)
+
+    private func connectRTC(call: IncomingVoiceCall) {
+        currentCall = call
+
+        let engineCfg = ByteRTCEngineConfig()
+        engineCfg.appID = call.appId
+        rtcEngine = ByteRTCEngine.createRTCEngine(engineCfg, delegate: self)
+
+        rtcEngine?.setAudioScenario(.aiClient)
+        rtcEngine?.setAudioProfile(.standard)
+        rtcEngine?.setAnsMode(.automatic)
+
+        rtcRoom = rtcEngine?.createRTCRoom(call.roomId)
+        rtcRoom?.delegate = self
+
+        let userInfo = ByteRTCUserInfo()
+        userInfo.userId = call.userId
+        userInfo.extraInfo = "{\"call_scene\":\"RTC-AIGC\",\"user_name\":\"\(call.userId)\",\"user_id\":\"\(call.userId)\"}"
+
+        let roomCfg = ByteRTCRoomConfig()
+        roomCfg.profile = .communication
+        roomCfg.isPublishAudio = true
+
+        rtcRoom?.joinRoom(call.token, userInfo: userInfo, userVisibility: true, roomConfig: roomCfg)
+        // Audio capture starts in didActivate(audioSession:) callback
+    }
+
+    private func disconnectRTC() {
+        rtcEngine?.stopAudioCapture()
+        rtcRoom?.leave()
+        rtcRoom?.destroy()
+        ByteRTCEngine.destroyRTCEngine()
+        rtcEngine = nil
+        rtcRoom = nil
+        currentCall = nil
     }
 }
 
@@ -92,7 +134,7 @@ final class CallKitService: NSObject {
 
 extension CallKitService: CXProviderDelegate {
     func providerDidReset(_ provider: CXProvider) {
-        activeCall = nil
+        disconnectRTC()
         activeCallUUID = nil
         pendingCalls.removeAll()
     }
@@ -104,15 +146,17 @@ extension CallKitService: CXProviderDelegate {
         }
 
         activeCallUUID = action.callUUID
-        activeCall = call
         pendingCalls.removeValue(forKey: action.callUUID)
         action.fulfill()
+
+        // Connect RTC audio directly — no app UI needed
+        connectRTC(call: call)
     }
 
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         pendingCalls.removeValue(forKey: action.callUUID)
         if activeCallUUID == action.callUUID {
-            activeCall = nil
+            disconnectRTC()
             activeCallUUID = nil
         }
         action.fulfill()
@@ -120,6 +164,8 @@ extension CallKitService: CXProviderDelegate {
 
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         print("[CallKit] Audio session activated")
+        // Start audio capture now that CallKit has activated the session
+        rtcEngine?.startAudioCapture()
     }
 
     func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
@@ -128,5 +174,43 @@ extension CallKitService: CXProviderDelegate {
 
     func provider(_ provider: CXProvider, timedOutPerforming action: CXAction) {
         action.fulfill()
+    }
+}
+
+// MARK: - ByteRTCEngineDelegate
+
+extension CallKitService: ByteRTCEngineDelegate {
+    func rtcEngine(_ engine: ByteRTCEngine, onError errorCode: ByteRTCErrorCode) {
+        print("[CallKit RTC] Engine error: \(errorCode.rawValue)")
+        reportCallEnded(reason: .failed)
+    }
+}
+
+// MARK: - ByteRTCRoomDelegate
+
+extension CallKitService: ByteRTCRoomDelegate {
+    func rtcRoom(_ rtcRoom: ByteRTCRoom, onRoomStateChanged roomId: String, withUid uid: String, state: Int, extraInfo: String) {
+        if state == 0 {
+            print("[CallKit RTC] Connected to room")
+            reportCallConnected()
+        } else if state < 0 {
+            print("[CallKit RTC] Room error: \(state)")
+            reportCallEnded(reason: .failed)
+        }
+    }
+
+    func rtcRoom(_ rtcRoom: ByteRTCRoom, onUserJoined userInfo: ByteRTCUserInfo) {
+        // AI user joined
+    }
+
+    func rtcRoom(_ rtcRoom: ByteRTCRoom, onUserLeave uid: String, reason: ByteRTCUserOfflineReason) {
+        if uid == currentCall?.aiUserId {
+            // AI left — end the CallKit call
+            reportCallEnded(reason: .remoteEnded)
+        }
+    }
+
+    func rtcRoom(_ rtcRoom: ByteRTCRoom, onRoomBinaryMessageReceived uid: String, message: Data) {
+        // Subtitles not displayed in CallKit native UI — ignore
     }
 }

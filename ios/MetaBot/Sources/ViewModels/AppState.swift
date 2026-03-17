@@ -211,6 +211,11 @@ final class AppState {
             }
 
         case .voiceCall(let call):
+            // If PushKit VoIP is registered, CallKit handles all incoming calls.
+            // Skip WebSocket path to prevent duplicate call UI.
+            if pushService.voipToken != nil {
+                break
+            }
             incomingVoiceCall = call
 
         case .groupCreated(let group):
