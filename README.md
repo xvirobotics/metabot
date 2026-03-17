@@ -336,6 +336,7 @@ MetaBot runs Claude Code in `bypassPermissions` mode — no interactive approval
 | `GET` | `/api/feishu/document` | Read a Feishu document as Markdown |
 | `GET` | `/api/stats` | Cost & usage stats (per-bot, per-user) |
 | `GET` | `/api/metrics` | Prometheus metrics endpoint |
+| `POST` | `/api/tts` | Text-to-speech (JSON text in, MP3 audio out) |
 
 ## CLI Tools
 
@@ -379,6 +380,12 @@ mb schedule resume <id>             # resume recurring task
 mb stats                            # cost & usage stats
 mb health                           # status check
 mb update                           # pull + rebuild + restart (one command)
+
+# Text-to-Speech
+mb voice "Hello world"              # generate MP3, print file path
+mb voice "Hello" --play             # generate and play audio
+mb voice "Hello" -o greeting.mp3    # save to specific file
+echo "Long text" | mb voice         # read from stdin
 ```
 
 ### Remote Access
