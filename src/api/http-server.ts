@@ -146,6 +146,9 @@ export function startApiServer(options: ApiServerOptions): http.Server {
   // Set up WebSocket server for Web UI streaming
   ws.handle = setupWebSocketServer(server, registry, logger, secret, peerManager, pushService);
 
+  // Wire WebSocket handle to scheduler so scheduled tasks stream updates to clients
+  scheduler.setWebSocketHandle(ws.handle);
+
   server.listen(port, host, () => {
     logger.info({ host, port }, 'API server started');
   });

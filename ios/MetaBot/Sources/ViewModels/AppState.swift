@@ -339,6 +339,21 @@ final class AppState {
     }
 
     func updateMessageState(chatId: String, messageId: String, state: CardState) {
+        // If message not found, create a placeholder (e.g. scheduled task or server-initiated)
+        if sessions[chatId]?.messages.contains(where: { $0.id == messageId }) != true {
+            if sessions[chatId] != nil {
+                let msg = ChatMessage(
+                    id: messageId, type: .assistant, text: "",
+                    state: state, attachments: nil,
+                    timestamp: Date().timeIntervalSince1970 * 1000
+                )
+                sessions[chatId]?.messages.append(msg)
+                sessions[chatId]?.updatedAt = Date().timeIntervalSince1970 * 1000
+                return
+            } else {
+                return // No session for this chatId
+            }
+        }
         guard let idx = sessions[chatId]?.messages.firstIndex(where: { $0.id == messageId }) else { return }
         sessions[chatId]?.messages[idx].state = state
         if let text = state.responseText, !text.isEmpty {
