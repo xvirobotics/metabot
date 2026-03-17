@@ -469,20 +469,25 @@ final class AppState {
 
     // MARK: - RTC Voice Call
 
-    /// Initiate an outgoing call to a bot via CallKit
+    /// Initiate an outgoing call — POST to server, which sends VoIP push back to us
     func initiateOutgoingCall(botName: String) {
-        print("[Call] initiateOutgoingCall: botName=\(botName), hasToken=\(auth.token != nil), isConnected=\(webSocket.isConnected)")
         guard let token = auth.token else {
             print("[Call] No auth token, cannot initiate call")
             return
         }
         let chatId = activeSessionForBot(botName)?.id ?? "call_\(UUID().uuidString.prefix(8))"
-        CallKitService.shared.initiateOutgoingCall(
-            botName: botName,
-            chatId: chatId,
-            serverURL: serverURL,
-            token: token
-        )
+        print("[Call] Requesting call to \(botName) via server...")
+
+        Task {
+            do {
+                let api = RtcAPIService(serverURL: serverURL, token: token)
+                // POST /api/rtc/voice → server creates RTC room + sends VoIP push → CallKit incoming UI
+                try await api.requestCall(botName: botName, chatId: chatId)
+                print("[Call] Server call initiated, waiting for VoIP push...")
+            } catch {
+                print("[Call] Failed to initiate call: \(error)")
+            }
+        }
     }
 
     func checkRtcAvailability() async {
