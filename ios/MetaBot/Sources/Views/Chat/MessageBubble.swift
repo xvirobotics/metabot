@@ -158,7 +158,6 @@ struct MessageBubble: View {
                 .padding(.top, 8)
             }
         }
-        .padding(.horizontal, 16)
         .padding(.vertical, 4)
         .contextMenu {
             Button {
