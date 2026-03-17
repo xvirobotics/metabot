@@ -10,16 +10,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // Set delegate early so cold-launch notification taps are handled
         UNUserNotificationCenter.current().delegate = self
-        // Cold launch via Quick Action
-        if let shortcutItem = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
-            let prefix = "com.xvirobotics.MetaBot.call."
-            if shortcutItem.type.hasPrefix(prefix) {
-                let botName = String(shortcutItem.type.dropFirst(prefix.count))
-                print("[App] Quick Action (didFinishLaunching): \(botName)")
-                AppDelegate.pendingQuickAction = botName
-            }
-        }
         return true
     }
 
@@ -78,10 +70,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     /// Pending call data from push notification (survives cold launch)
     static var pendingCallData: [String: String]?
 
-    /// Pending Quick Action bot name (set when user long-presses app icon)
-    static var pendingQuickAction: String?
-
-    /// Called when app is already running and Quick Action is triggered
+    /// Handle Quick Action when app is already running
     func application(
         _ application: UIApplication,
         performActionFor shortcutItem: UIApplicationShortcutItem,
@@ -90,8 +79,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         let prefix = "com.xvirobotics.MetaBot.call."
         if shortcutItem.type.hasPrefix(prefix) {
             let botName = String(shortcutItem.type.dropFirst(prefix.count))
-            print("[App] Quick Action (running): \(botName)")
-            AppDelegate.pendingQuickAction = botName
+            print("[App] Quick Action: \(botName)")
             NotificationCenter.default.post(name: .quickActionCall, object: nil, userInfo: ["botName": botName])
         }
         completionHandler(true)
@@ -111,7 +99,6 @@ struct MetaBotApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @Environment(\.scenePhase) private var scenePhase
     @State private var appState = AppState()
-    @State private var selectedQuickAction: String?
 
     var body: some Scene {
         WindowGroup {
@@ -144,7 +131,6 @@ struct MetaBotApp: App {
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .active {
                     appState.handleForegroundReturn()
-                    checkPendingActions()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .navigateToChat)) { notification in
@@ -159,36 +145,20 @@ struct MetaBotApp: App {
             }
             .onReceive(NotificationCenter.default.publisher(for: .quickActionCall)) { notification in
                 if let botName = notification.userInfo?["botName"] as? String {
-                    print("[App] Quick Action notification received: \(botName)")
+                    print("[App] Quick Action received: \(botName)")
                     appState.initiateOutgoingCall(botName: botName)
                 }
             }
             .task {
-                // Cold launch: wait for WS connection then check pending actions
-                try? await Task.sleep(for: .seconds(1.5))
-                await MainActor.run {
-                    if let data = AppDelegate.pendingCallData {
-                        AppDelegate.pendingCallData = nil
+                // Cold launch: check if app was opened from a call push notification
+                if let data = AppDelegate.pendingCallData {
+                    AppDelegate.pendingCallData = nil
+                    try? await Task.sleep(for: .seconds(1.5))
+                    await MainActor.run {
                         appState.incomingVoiceCall = Self.parseCallFromDict(data)
                     }
-                    checkPendingActions()
                 }
             }
-        }
-    }
-
-    /// Check and execute any pending Quick Action or Siri intent
-    private func checkPendingActions() {
-        print("[App] checkPendingActions: quickAction=\(AppDelegate.pendingQuickAction ?? "nil"), siri=\(CallBotIntent.pendingCallBot ?? "nil"), auth=\(appState.auth.isAuthenticated)")
-        if let botName = AppDelegate.pendingQuickAction {
-            AppDelegate.pendingQuickAction = nil
-            print("[App] Executing Quick Action call to: \(botName)")
-            appState.initiateOutgoingCall(botName: botName)
-        }
-        if let botName = CallBotIntent.pendingCallBot {
-            CallBotIntent.pendingCallBot = nil
-            print("[App] Executing Siri call to: \(botName)")
-            appState.initiateOutgoingCall(botName: botName)
         }
     }
 

@@ -321,7 +321,6 @@ extension RtcVoiceService: ByteRTCRoomDelegate {
             Task { @MainActor in
                 self.callPhase = .connected
                 self.callStartTime = Date()
-                CallKitService.shared.reportOutgoingCallConnected()
             }
         } else if state < 0 {
             let errorMsg: String

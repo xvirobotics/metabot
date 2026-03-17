@@ -46,6 +46,7 @@ targets:
       path: MetaBot.entitlements
       properties:
         aps-environment: development
+        com.apple.developer.networking.voip: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.xvirobotics.MetaBot
@@ -63,7 +64,6 @@ targets:
         product: MarkdownUI
       - sdk: AVFoundation.framework
       - sdk: CallKit.framework
-      - sdk: Intents.framework
       - sdk: PushKit.framework
       - sdk: Speech.framework
       - sdk: UserNotifications.framework
