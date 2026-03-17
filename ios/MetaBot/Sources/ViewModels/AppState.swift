@@ -104,13 +104,20 @@ final class AppState {
         groups = []
     }
 
-    /// Called when app returns to foreground — reconnect and resume active sessions
+    /// Called when app returns to foreground — reconnect if needed
     func handleForegroundReturn() {
         guard auth.isAuthenticated else { return }
         if !webSocket.isConnected {
             connect()
+        } else {
+            // Already connected — resume immediately
+            resumeActiveSessions()
         }
-        // Send resume for all sessions that have running tasks
+        // If not connected, resume will happen in handleMessage(.connected)
+    }
+
+    /// Send resume for sessions with running/thinking tasks to recover missed updates
+    private func resumeActiveSessions() {
         let activeChatIds = sessions.values
             .filter { session in
                 let lastStatus = session.messages.last?.state?.status
@@ -148,6 +155,8 @@ final class AppState {
             }
             // Request groups list on connect
             webSocket.send(.listGroups)
+            // Resume any running sessions (recover missed updates after reconnect)
+            resumeActiveSessions()
 
         case .botsUpdated(let bots):
             self.bots = bots
