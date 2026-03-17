@@ -99,6 +99,7 @@ final class AppState {
         messageListenerTask?.cancel()
         messageListenerTask = nil
         webSocket.disconnect()
+        webSocket.resetMessageStream()
         bots = []
         groups = []
     }
@@ -122,7 +123,8 @@ final class AppState {
     }
 
     private func startListening() {
-        messageListenerTask?.cancel()
+        // Only start if not already listening — AsyncStream can only be consumed once
+        guard messageListenerTask == nil else { return }
         messageListenerTask = Task { [weak self] in
             guard let self else { return }
             for await message in self.webSocket.messageStream {
@@ -130,6 +132,8 @@ final class AppState {
                     self.handleMessage(message)
                 }
             }
+            // Stream ended (shouldn't happen normally) — allow restart
+            await MainActor.run { self.messageListenerTask = nil }
         }
     }
 

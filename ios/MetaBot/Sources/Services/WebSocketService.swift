@@ -33,10 +33,10 @@ final class WebSocketService: NSObject, @unchecked Sendable {
 
     override init() {
         super.init()
-        resetStream()
+        resetMessageStream()
     }
 
-    private func resetStream() {
+    func resetMessageStream() {
         messageStream = AsyncStream { [weak self] continuation in
             self?.messageContinuation = continuation
         }
