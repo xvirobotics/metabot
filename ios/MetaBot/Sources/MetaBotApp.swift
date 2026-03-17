@@ -69,27 +69,11 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
     /// Pending call data from push notification (survives cold launch)
     static var pendingCallData: [String: String]?
-
-    /// Handle Quick Action when app is already running
-    func application(
-        _ application: UIApplication,
-        performActionFor shortcutItem: UIApplicationShortcutItem,
-        completionHandler: @escaping (Bool) -> Void
-    ) {
-        let prefix = "com.xvirobotics.MetaBot.call."
-        if shortcutItem.type.hasPrefix(prefix) {
-            let botName = String(shortcutItem.type.dropFirst(prefix.count))
-            print("[App] Quick Action: \(botName)")
-            NotificationCenter.default.post(name: .quickActionCall, object: nil, userInfo: ["botName": botName])
-        }
-        completionHandler(true)
-    }
 }
 
 extension Notification.Name {
     static let navigateToChat = Notification.Name("navigateToChat")
     static let incomingCallFromPush = Notification.Name("incomingCallFromPush")
-    static let quickActionCall = Notification.Name("quickActionCall")
 }
 
 // MARK: - App Entry Point
@@ -141,12 +125,6 @@ struct MetaBotApp: App {
             .onReceive(NotificationCenter.default.publisher(for: .incomingCallFromPush)) { notification in
                 if let info = notification.userInfo {
                     appState.incomingVoiceCall = Self.parseCallFromUserInfo(info)
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .quickActionCall)) { notification in
-                if let botName = notification.userInfo?["botName"] as? String {
-                    print("[App] Quick Action received: \(botName)")
-                    appState.initiateOutgoingCall(botName: botName)
                 }
             }
             .task {

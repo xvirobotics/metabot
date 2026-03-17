@@ -1,0 +1,3 @@
+module NetworkImage {
+    header "/Users/floodsung/metabot/ios/MetaBot/.build/index-build/arm64-apple-macosx/debug/NetworkImage.build/include/NetworkImage-Swift.h"
+}

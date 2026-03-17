@@ -1,6 +1,5 @@
 import Foundation
 import SwiftUI
-import UIKit
 
 /// Global application state
 @Observable
@@ -162,15 +161,6 @@ final class AppState {
             if activeBotName == nil, let first = bots.first {
                 activeBotName = first.name
             }
-            // Update Quick Actions with first 4 bots for long-press menu
-            UIApplication.shared.shortcutItems = bots.prefix(4).map { bot in
-                UIApplicationShortcutItem(
-                    type: "com.xvirobotics.MetaBot.call.\(bot.name)",
-                    localizedTitle: "Call \(bot.name)",
-                    localizedSubtitle: "Voice call",
-                    icon: UIApplicationShortcutIcon(systemImageName: "phone.fill")
-                )
-            }
             // Request groups list on connect
             webSocket.send(.listGroups)
             // Resume any running sessions (recover missed updates after reconnect)
@@ -220,10 +210,8 @@ final class AppState {
                 addMessage(chatId: chatId, message: msg)
             }
 
-        case .voiceCall:
-            // VoIP push + CallKit handles incoming calls natively.
-            // Ignore WebSocket voice_call to avoid duplicate UI / app jumping to foreground.
-            break
+        case .voiceCall(let call):
+            incomingVoiceCall = call
 
         case .groupCreated(let group):
             groups.append(group)
@@ -470,27 +458,6 @@ final class AppState {
     }
 
     // MARK: - RTC Voice Call
-
-    /// Initiate an outgoing call — POST to server, which sends VoIP push back to us
-    func initiateOutgoingCall(botName: String) {
-        guard let token = auth.token else {
-            print("[Call] No auth token, cannot initiate call")
-            return
-        }
-        let chatId = activeSessionForBot(botName)?.id ?? "call_\(UUID().uuidString.prefix(8))"
-        print("[Call] Requesting call to \(botName) via server...")
-
-        Task {
-            do {
-                let api = RtcAPIService(serverURL: serverURL, token: token)
-                // POST /api/rtc/voice → server creates RTC room + sends VoIP push → CallKit incoming UI
-                try await api.requestCall(botName: botName, chatId: chatId)
-                print("[Call] Server call initiated, waiting for VoIP push...")
-            } catch {
-                print("[Call] Failed to initiate call: \(error)")
-            }
-        }
-    }
 
     func checkRtcAvailability() async {
         guard let token = auth.token else { return }

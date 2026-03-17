@@ -61,30 +61,6 @@ struct RtcAPIService {
         return try JSONDecoder().decode(StartCallResponse.self, from: data)
     }
 
-    /// POST /api/rtc/voice — Request call (server creates room + sends VoIP push back)
-    func requestCall(botName: String, chatId: String) async throws {
-        let url = URL(string: "\(serverURL)/api/rtc/voice")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 30
-
-        let body: [String: String] = ["botName": botName, "chatId": chatId]
-        request.httpBody = try JSONEncoder().encode(body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if let errJson = try? JSONDecoder().decode([String: String].self, from: data),
-               let errMsg = errJson["error"] {
-                throw RtcAPIError.serverError(errMsg)
-            }
-            throw RtcAPIError.requestFailed(statusCode: code)
-        }
-        // Server will send VoIP push — we don't need the response
-    }
-
     /// POST /api/rtc/stop — Stop voice chat session
     func stopCall(sessionId: String) async throws {
         let url = URL(string: "\(serverURL)/api/rtc/stop")!
