@@ -26,6 +26,14 @@ const FINAL_CARD_RETRIES = 3;
 const FINAL_CARD_BASE_DELAY_MS = 2000;
 const TASK_TIMEOUT_MESSAGE = 'Task timed out (24 hour limit)';
 const IDLE_TIMEOUT_MESSAGE = 'Task aborted: no activity for 1 hour';
+const BATCH_DEBOUNCE_MS = 2000; // 2s window to collect multiple images/files
+const DEFAULT_IMAGE_TEXT = '请分析这张图片';
+const DEFAULT_FILE_TEXT = '请分析这个文件';
+
+interface PendingBatch {
+  messages: IncomingMessage[];
+  timerId: ReturnType<typeof setTimeout>;
+}
 
 interface RunningTask {
   abortController: AbortController;
@@ -65,6 +73,7 @@ export class MessageBridge {
   readonly costTracker: CostTracker;
   private runningTasks = new Map<string, RunningTask>(); // keyed by chatId
   private messageQueues = new Map<string, IncomingMessage[]>(); // per-chatId message queue
+  private pendingBatches = new Map<string, PendingBatch>(); // media debounce batches
 
   constructor(
     private config: BotConfigBase,
@@ -156,6 +165,21 @@ export class MessageBridge {
 
     // If a task is running, queue the message instead of rejecting
     if (this.runningTasks.has(chatId)) {
+      // If there's a pending batch and this is a text message, merge batch into the queued text
+      const batch = this.pendingBatches.get(chatId);
+      if (batch && !this.isDefaultMediaText(msg)) {
+        clearTimeout(batch.timerId);
+        this.pendingBatches.delete(chatId);
+        const merged = this.mergeBatchWithText(batch.messages, msg);
+        msg = merged;
+      } else if (batch && this.isDefaultMediaText(msg)) {
+        // Another media message while task is running — just add to batch
+        batch.messages.push(msg);
+        clearTimeout(batch.timerId);
+        batch.timerId = setTimeout(() => this.flushBatch(chatId), BATCH_DEBOUNCE_MS);
+        return;
+      }
+
       const queue = this.messageQueues.get(chatId) || [];
       if (queue.length >= MAX_QUEUE_SIZE) {
         await this.sender.sendTextNotice(
@@ -168,7 +192,7 @@ export class MessageBridge {
       }
       queue.push(msg);
       this.messageQueues.set(chatId, queue);
-      this.audit.log({ event: 'task_queued', botName: this.config.name, chatId, userId: msg.userId, prompt: text, meta: { position: queue.length } });
+      this.audit.log({ event: 'task_queued', botName: this.config.name, chatId, userId: msg.userId, prompt: msg.text, meta: { position: queue.length } });
       await this.sender.sendTextNotice(
         chatId,
         '📋 Queued',
@@ -178,7 +202,35 @@ export class MessageBridge {
       return;
     }
 
-    // Execute Claude query
+    // Smart debounce: batch media-only messages, execute text immediately
+    const isMediaOnly = this.isDefaultMediaText(msg);
+    const batch = this.pendingBatches.get(chatId);
+
+    if (isMediaOnly) {
+      // Media message: add to batch and wait for more
+      if (batch) {
+        batch.messages.push(msg);
+        clearTimeout(batch.timerId);
+        batch.timerId = setTimeout(() => this.flushBatch(chatId), BATCH_DEBOUNCE_MS);
+      } else {
+        const timerId = setTimeout(() => this.flushBatch(chatId), BATCH_DEBOUNCE_MS);
+        this.pendingBatches.set(chatId, { messages: [msg], timerId });
+      }
+      this.logger.info({ chatId, imageKey: msg.imageKey, fileKey: msg.fileKey }, 'Media message batched, waiting for more');
+      return;
+    }
+
+    // Text message: if pending batch exists, merge and execute immediately
+    if (batch) {
+      clearTimeout(batch.timerId);
+      this.pendingBatches.delete(chatId);
+      const merged = this.mergeBatchWithText(batch.messages, msg);
+      this.logger.info({ chatId, batchSize: batch.messages.length }, 'Flushing media batch with text message');
+      await this.executeQuery(merged);
+      return;
+    }
+
+    // Plain text, no batch: execute immediately (original behavior)
     await this.executeQuery(msg);
   }
 
@@ -237,6 +289,74 @@ export class MessageBridge {
     });
   }
 
+  /** Check if message is a media message with default (auto-generated) text. */
+  private isDefaultMediaText(msg: IncomingMessage): boolean {
+    return (!!msg.imageKey && msg.text === DEFAULT_IMAGE_TEXT)
+        || (!!msg.fileKey && msg.text === DEFAULT_FILE_TEXT);
+  }
+
+  /** Timer expired: merge batched media messages and execute. */
+  private flushBatch(chatId: string): void {
+    const batch = this.pendingBatches.get(chatId);
+    if (!batch) return;
+    this.pendingBatches.delete(chatId);
+
+    const merged = this.mergeBatchMessages(batch.messages);
+    this.logger.info({ chatId, batchSize: batch.messages.length }, 'Flushing media batch (timeout)');
+
+    // If a task started running during the debounce window, queue instead
+    if (this.runningTasks.has(chatId)) {
+      const queue = this.messageQueues.get(chatId) || [];
+      if (queue.length < MAX_QUEUE_SIZE) {
+        queue.push(merged);
+        this.messageQueues.set(chatId, queue);
+        this.sender.sendTextNotice(chatId, '📋 Queued', `Your ${batch.messages.length} media message(s) have been queued.`, 'blue')
+          .catch(() => {});
+      }
+      return;
+    }
+
+    this.executeQuery(merged).catch(err => {
+      this.logger.error({ err, chatId }, 'Error executing batched messages');
+    });
+  }
+
+  /** Merge multiple media-only messages into one (no user text). */
+  private mergeBatchMessages(messages: IncomingMessage[]): IncomingMessage {
+    const first = messages[0];
+    if (messages.length === 1) return first;
+
+    const imageCount = messages.filter(m => m.imageKey).length;
+    const fileCount = messages.filter(m => m.fileKey).length;
+    const parts: string[] = [];
+    if (imageCount > 0) parts.push(`${imageCount}张图片`);
+    if (fileCount > 0) parts.push(`${fileCount}个文件`);
+
+    return {
+      ...first,
+      text: `请分析这些${parts.join('和')}`,
+      extraMedia: messages.slice(1).map(m => ({
+        messageId: m.messageId,
+        imageKey: m.imageKey,
+        fileKey: m.fileKey,
+        fileName: m.fileName,
+      })),
+    };
+  }
+
+  /** Merge batched media messages with a user text message. */
+  private mergeBatchWithText(batchMsgs: IncomingMessage[], textMsg: IncomingMessage): IncomingMessage {
+    return {
+      ...textMsg,
+      extraMedia: batchMsgs.map(m => ({
+        messageId: m.messageId,
+        imageKey: m.imageKey,
+        fileKey: m.fileKey,
+        fileName: m.fileName,
+      })),
+    };
+  }
+
   private async executeQuery(msg: IncomingMessage): Promise<void> {
     const { userId, chatId, text, imageKey, fileKey, fileName, messageId: msgId } = msg;
     const session = this.sessionManager.getSession(chatId);
@@ -272,11 +392,41 @@ export class MessageBridge {
       }
     }
 
+    // Handle extra media from batched messages
+    const extraPaths: string[] = [];
+    if (msg.extraMedia && msg.extraMedia.length > 0) {
+      for (const media of msg.extraMedia) {
+        if (media.imageKey) {
+          const p = path.join(downloadsDir, `${media.imageKey}.png`);
+          const ok = await this.sender.downloadImage(media.messageId, media.imageKey, p);
+          if (ok) {
+            extraPaths.push(p);
+            prompt += `\n[Image saved at: ${p}]`;
+          }
+        }
+        if (media.fileKey && media.fileName) {
+          const p = path.join(downloadsDir, `${media.fileKey}_${media.fileName}`);
+          const ok = await this.sender.downloadFile(media.messageId, media.fileKey, p);
+          if (ok) {
+            extraPaths.push(p);
+            prompt += `\n[File saved at: ${p}]`;
+          }
+        }
+      }
+      if (extraPaths.length > 0) {
+        prompt += '\nPlease use the Read tool to analyze all the above files.';
+      }
+    }
+
     // Prepare per-chat outputs directory
     const outputsDir = this.outputsManager.prepareDir(chatId);
 
     // Send initial "thinking" card
-    const displayPrompt = fileKey ? '📎 ' + text : imageKey ? '🖼️ ' + text : text;
+    const mediaCount = 1 + (msg.extraMedia?.length || 0);
+    const hasMedia = imageKey || fileKey;
+    const displayPrompt = hasMedia && mediaCount > 1
+      ? `🖼️ [${mediaCount} files] ${text}`
+      : fileKey ? '📎 ' + text : imageKey ? '🖼️ ' + text : text;
     const processor = new StreamProcessor(displayPrompt);
     const initialState: CardState = {
       status: 'thinking',
@@ -576,6 +726,9 @@ export class MessageBridge {
       }
       if (filePath) {
         try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+      }
+      for (const p of extraPaths) {
+        try { fs.unlinkSync(p); } catch { /* ignore */ }
       }
       try { this.outputsManager.cleanup(outputsDir); } catch { /* ignore */ }
     }
@@ -933,6 +1086,10 @@ export class MessageBridge {
   }
 
   destroy(): void {
+    for (const [, batch] of this.pendingBatches) {
+      clearTimeout(batch.timerId);
+    }
+    this.pendingBatches.clear();
     for (const [chatId, task] of this.runningTasks) {
       if (task.questionTimeoutId) {
         clearTimeout(task.questionTimeoutId);
