@@ -24,6 +24,14 @@ final class CallKitService: NSObject {
     private var rtcEngine: ByteRTCEngine?
     private var rtcRoom: ByteRTCRoom?
     private var currentCall: IncomingVoiceCall?
+    private var transcript: [RtcAPIService.TranscriptEntry] = []
+
+    /// Server credentials for transcript submission (set by AppState.connect)
+    var serverURL: String = ""
+    var authToken: String = ""
+
+    /// Called on main thread when a CallKit-managed call ends. Parameters: (transcriptText, call)
+    var onCallEnded: ((String?, IncomingVoiceCall?) -> Void)?
 
     private override init() {
         let config = CXProviderConfiguration(localizedName: "MetaBot")
@@ -120,6 +128,12 @@ final class CallKitService: NSObject {
     }
 
     private func disconnectRTC() {
+        let call = currentCall
+        let collectedTranscript = transcript
+        let url = serverURL
+        let token = authToken
+
+        // Cleanup RTC
         rtcEngine?.stopAudioCapture()
         rtcRoom?.leave()
         rtcRoom?.destroy()
@@ -127,6 +141,26 @@ final class CallKitService: NSObject {
         rtcEngine = nil
         rtcRoom = nil
         currentCall = nil
+        transcript = []
+
+        // Format transcript (same format as RtcVoiceService)
+        let transcriptText: String? = collectedTranscript.isEmpty ? nil :
+            collectedTranscript.map { "[\($0.speaker == "ai" ? "AI" : "User")]: \($0.text)" }
+                .joined(separator: "\n")
+
+        // Submit transcript to server & stop session (fire-and-forget)
+        if let call, !url.isEmpty {
+            let api = RtcAPIService(serverURL: url, token: token)
+            Task {
+                if !collectedTranscript.isEmpty {
+                    try? await api.submitTranscript(sessionId: call.sessionId, transcript: collectedTranscript)
+                }
+                try? await api.stopCall(sessionId: call.sessionId)
+            }
+        }
+
+        // Notify listener (AppState injects transcript into chat)
+        onCallEnded?(transcriptText, call)
     }
 }
 
@@ -211,6 +245,17 @@ extension CallKitService: ByteRTCRoomDelegate {
     }
 
     func rtcRoom(_ rtcRoom: ByteRTCRoom, onRoomBinaryMessageReceived uid: String, message: Data) {
-        // Subtitles not displayed in CallKit native UI — ignore
+        // Collect subtitles for transcript (reuses parseSubtitle from RtcVoiceService.swift)
+        guard let subtitle = parseSubtitle(from: message), subtitle.type == "subtitle" else { return }
+        for entry in subtitle.data {
+            if entry.paragraph && entry.definite && !entry.text.trimmingCharacters(in: .whitespaces).isEmpty {
+                let speaker = entry.userId == currentCall?.aiUserId ? "ai" : "user"
+                transcript.append(RtcAPIService.TranscriptEntry(
+                    speaker: speaker,
+                    text: entry.text.trimmingCharacters(in: .whitespaces),
+                    timestamp: Date().timeIntervalSince1970 * 1000
+                ))
+            }
+        }
     }
 }

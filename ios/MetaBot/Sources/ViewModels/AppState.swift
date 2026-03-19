@@ -101,6 +101,20 @@ final class AppState {
 
         // Check RTC availability
         Task { await checkRtcAvailability() }
+
+        // Configure CallKit with server credentials for transcript submission
+        let callKit = CallKitService.shared
+        callKit.serverURL = serverURL
+        callKit.authToken = token
+
+        // Listen for CallKit call completion — inject transcript into chat
+        callKit.onCallEnded = { [weak self] transcriptText, call in
+            guard let self, let transcriptText, let call else { return }
+            let formatted = "[语音通话记录]\n\n\(transcriptText)\n\n请根据以上语音对话内容，判断是否有需要执行的后续任务。如果对话中提到了具体的工作请求，请直接执行。如果只是闲聊，简单确认即可。"
+            let sessionId = self.activeSessionForBot(call.botName)?.id
+                ?? self.createSession(botName: call.botName)
+            self.injectRtcTranscript(formatted, chatId: sessionId, botName: call.botName)
+        }
     }
 
     func disconnect() {
