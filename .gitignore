@@ -10,3 +10,4 @@ data/
 site/
 ios/MetaBot/.build/
 ios/MetaBot/.swiftpm/
+ios/AuthKey*.p8

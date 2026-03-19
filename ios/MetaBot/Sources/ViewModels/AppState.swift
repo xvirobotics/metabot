@@ -107,6 +107,24 @@ final class AppState {
         callKit.serverURL = serverURL
         callKit.authToken = token
 
+        // Build system prompt for outgoing calls (Phone recents callback)
+        callKit.onBuildSystemPrompt = { [weak self] botName in
+            guard let self else { return nil }
+            // Find most recent session for this bot to get chat context
+            let chatContext = self.activeSessionForBot(botName)
+                .map { self.buildChatContext(forSession: $0.id) } ?? ""
+            if chatContext.isEmpty {
+                return "你是 \(botName)。用用户说的语言回答。简洁、自然地对话。"
+            }
+            return """
+            你是 \(botName)。用用户说的语言回答。简洁、自然地对话。
+
+            以下是你和用户之前的文字聊天记录，请基于这些上下文继续对话：
+
+            \(chatContext)
+            """
+        }
+
         // Listen for CallKit call completion — inject transcript into chat
         callKit.onCallEnded = { [weak self] transcriptText, call in
             guard let self, let transcriptText, let call else { return }

@@ -36,6 +36,9 @@ final class CallKitService: NSObject {
     /// Called on main thread when a CallKit-managed call ends. Parameters: (transcriptText, call)
     var onCallEnded: ((String?, IncomingVoiceCall?) -> Void)?
 
+    /// Called to build system prompt for outgoing calls. Parameters: (botName) -> systemPrompt?
+    var onBuildSystemPrompt: ((String) -> String?)?
+
     private override init() {
         let config = CXProviderConfiguration(localizedName: "MetaBot")
         config.supportsVideo = false
@@ -237,10 +240,11 @@ extension CallKitService: CXProviderDelegate {
 
         let chatId = "callkit_\(uuid.uuidString.prefix(8).lowercased())"
         let api = RtcAPIService(serverURL: serverURL, token: authToken)
+        let systemPrompt = onBuildSystemPrompt?(botName)
 
         Task {
             do {
-                let response = try await api.startCall(botName: botName, chatId: chatId)
+                let response = try await api.startCall(botName: botName, chatId: chatId, systemPrompt: systemPrompt)
                 let call = IncomingVoiceCall(
                     sessionId: response.sessionId, roomId: response.roomId,
                     token: response.token, appId: response.appId,
