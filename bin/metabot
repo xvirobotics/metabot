@@ -21,7 +21,7 @@ cmd_update() {
 
   if [[ ! -d "$METABOT_HOME/.git" ]]; then
     error "MetaBot not found at $METABOT_HOME"
-    echo "  Run the installer first: curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh | bash"
+    echo "  Run the installer first: curl -fsSL https://raw.githubusercontent.com/Shiien/metabot/main/install.sh | bash"
     exit 1
   fi
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # MetaBot Uninstaller
 # Usage: bash uninstall.sh
-#   or:  curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/uninstall.sh | bash
+#   or:  curl -fsSL https://raw.githubusercontent.com/Shiien/metabot/main/uninstall.sh | bash
 set -euo pipefail
 
 # ============================================================================
