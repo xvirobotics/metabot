@@ -1,5 +1,5 @@
 # MetaBot Installer for Windows PowerShell
-# Usage: irm https://raw.githubusercontent.com/xvirobotics/metabot/main/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/Shiien/metabot/main/install.ps1 | iex
 #Requires -Version 5.1
 
 $ErrorActionPreference = "Stop"
@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 # ============================================================================
 # Configuration defaults
 # ============================================================================
-$MetabotRepo = if ($env:METABOT_REPO) { $env:METABOT_REPO } else { "https://github.com/xvirobotics/metabot.git" }
+$MetabotRepo = if ($env:METABOT_REPO) { $env:METABOT_REPO } else { "https://github.com/Shiien/metabot.git" }
 $MetabotHome = if ($env:METABOT_HOME) { $env:METABOT_HOME } else { Join-Path $env:USERPROFILE "metabot" }
 
 # ============================================================================
