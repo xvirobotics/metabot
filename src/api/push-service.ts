@@ -47,7 +47,8 @@ export class PushService {
    * Skips sending if the chatId has no registered tokens.
    */
   async notifyTaskComplete(chatId: string, state: CardState, botName: string): Promise<void> {
-    const tokens = this.deviceStore.getTokens(chatId);
+    let tokens = this.deviceStore.getTokens(chatId);
+    if (tokens.length === 0) tokens = this.deviceStore.getAllTokens();
     if (tokens.length === 0) return;
 
     const statusEmoji = state.status === 'complete' ? '✅' : '❌';
@@ -77,7 +78,8 @@ export class PushService {
 
   /** Notify when AI has a question waiting for user input */
   async notifyPendingQuestion(chatId: string, question: string, botName: string): Promise<void> {
-    const tokens = this.deviceStore.getTokens(chatId);
+    let tokens = this.deviceStore.getTokens(chatId);
+    if (tokens.length === 0) tokens = this.deviceStore.getAllTokens();
     if (tokens.length === 0) return;
 
     const title = `❓ ${botName}`;
@@ -103,7 +105,11 @@ export class PushService {
   /** Notify for incoming RTC voice call */
   async notifyIncomingCall(chatId: string, botName: string, callData?: Record<string, string>): Promise<void> {
     // Try VoIP push first (triggers native CallKit UI)
-    const voipTokens = this.deviceStore.getVoIPTokens(chatId);
+    // Fall back to all registered devices if no tokens found for this specific chatId
+    let voipTokens = this.deviceStore.getVoIPTokens(chatId);
+    if (voipTokens.length === 0) {
+      voipTokens = this.deviceStore.getAllVoIPTokens();
+    }
     if (voipTokens.length > 0) {
       const voipPayload = {
         sessionId: callData?.sessionId ?? '',
@@ -129,7 +135,10 @@ export class PushService {
     }
 
     // Fallback: regular APNs push (for older app versions without CallKit)
-    const tokens = this.deviceStore.getTokens(chatId);
+    let tokens = this.deviceStore.getTokens(chatId);
+    if (tokens.length === 0) {
+      tokens = this.deviceStore.getAllTokens();
+    }
     if (tokens.length === 0) return;
 
     const title = `📞 ${botName}`;

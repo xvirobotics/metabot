@@ -73,6 +73,24 @@ export class DeviceStore {
     return entry ? [...entry.voip] : [];
   }
 
+  /** Get ALL alert device tokens across all chatIds. */
+  getAllTokens(): string[] {
+    const tokens = new Set<string>();
+    for (const entry of this.store.values()) {
+      for (const t of entry.alert) tokens.add(t);
+    }
+    return [...tokens];
+  }
+
+  /** Get ALL VoIP device tokens across all chatIds. */
+  getAllVoIPTokens(): string[] {
+    const tokens = new Set<string>();
+    for (const entry of this.store.values()) {
+      for (const t of entry.voip) tokens.add(t);
+    }
+    return [...tokens];
+  }
+
   /** Get all registered chatIds (for debugging). */
   getAllChatIds(): string[] {
     return [...this.store.keys()];
