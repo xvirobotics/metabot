@@ -1067,6 +1067,8 @@ export class MessageBridge {
    * Only sends for tasks that took longer than 10 seconds.
    */
   private async sendCompletionNotice(chatId: string, state: CardState, durationMs: number): Promise<void> {
+    // Some senders (WeChat) already send the final response as a standalone message, so skip
+    if (this.sender.skipCompletionNotice) return;
     // Only notify for tasks that took a while — quick tasks don't need it
     if (durationMs < 10_000) return;
 
