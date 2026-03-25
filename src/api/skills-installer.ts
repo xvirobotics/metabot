@@ -1,42 +1,22 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import * as url from 'node:url';
 import type { Logger } from '../utils/logger.js';
-
-/** Skills installed for all platforms. */
-const COMMON_SKILLS = ['metaskill', 'metamemory', 'metabot', 'voice', 'report-bug', 'request-feature', 'fix-issue'];
-
-/** Skills only installed for Feishu bots. */
-const FEISHU_SKILLS = ['feishu-doc'];
 
 export interface InstallSkillsOptions {
   /** Bot platform — feishu-only skills are skipped for other platforms. */
   platform?: 'feishu' | 'telegram' | 'wechat';
 }
 
-export function installSkillsToWorkDir(workDir: string, logger: Logger, options?: InstallSkillsOptions): void {
-  const userSkillsDir = path.join(os.homedir(), '.claude', 'skills');
-  const destSkillsDir = path.join(workDir, '.claude', 'skills');
-
-  const skillNames = options?.platform === 'feishu'
-    ? [...COMMON_SKILLS, ...FEISHU_SKILLS]
-    : COMMON_SKILLS;
-
-  for (const skill of skillNames) {
-    const src = path.join(userSkillsDir, skill);
-
-    if (!fs.existsSync(src)) {
-      logger.debug({ skill }, 'Skill source not found, skipping');
-      continue;
-    }
-
-    const dest = path.join(destSkillsDir, skill);
-    fs.mkdirSync(dest, { recursive: true });
-    fs.cpSync(src, dest, { recursive: true });
-    logger.info({ skill, src, dest }, 'Skill installed to working directory');
-  }
-
+/**
+ * Deploy workspace CLAUDE.md to a new bot's working directory.
+ *
+ * Skills (metaskill, metamemory, metabot, etc.) are NOT copied per-bot — they
+ * live in ~/.claude/skills/ (global) and Claude Code makes them available to
+ * all bots automatically.  Copying them per-bot created redundant duplicates
+ * that diverged from the global versions over time.
+ */
+export function installSkillsToWorkDir(workDir: string, logger: Logger, _options?: InstallSkillsOptions): void {
   // Deploy workspace CLAUDE.md if not already present
   const destClaudeMd = path.join(workDir, 'CLAUDE.md');
   if (!fs.existsSync(destClaudeMd)) {
