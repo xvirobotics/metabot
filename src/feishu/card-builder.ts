@@ -306,7 +306,7 @@ export function buildCard(state: CardState): string {
   if (state.status === 'complete' || state.status === 'error') {
     const parts: string[] = [];
     if (state.model) {
-      parts.push(state.model);
+      parts.push(state.model.replace(/^claude-/, ''));
     }
     if (state.thinking) {
       parts.push(`thinking:${state.thinking}`);
@@ -315,13 +315,21 @@ export function buildCard(state: CardState): string {
       parts.push(`effort:${state.effort}`);
     }
     if (state.durationMs !== undefined) {
-      parts.push(`⏱ ${(state.durationMs / 1000).toFixed(1)}s`);
+      parts.push(`${(state.durationMs / 1000).toFixed(1)}s`);
     }
     if (state.numTurns !== undefined) {
-      parts.push(`🔄 ${state.numTurns} turns`);
+      parts.push(`${state.numTurns} turns`);
     }
     if (state.costUsd !== undefined) {
-      parts.push(`💰 $${state.costUsd.toFixed(4)}`);
+      parts.push(`$${state.costUsd.toFixed(2)}`);
+    }
+    if (state.totalTokens && state.contextWindow) {
+      const pct = Math.round((state.totalTokens / state.contextWindow) * 100);
+      const tokensK = state.totalTokens >= 1000
+        ? `${(state.totalTokens / 1000).toFixed(1)}k`
+        : `${state.totalTokens}`;
+      const ctxK = `${Math.round(state.contextWindow / 1000)}k`;
+      parts.push(`${tokensK}/${ctxK} (${pct}%)`);
     }
     if (state.workingDirectory) {
       const dir = state.workingDirectory;
@@ -330,7 +338,6 @@ export function buildCard(state: CardState): string {
     }
     if (state.sessionId) {
       parts.push(`🔑 ${state.sessionId.slice(0, 8)}`);
-
     }
     if (parts.length > 0) {
       elements.push({

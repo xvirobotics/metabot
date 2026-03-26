@@ -95,7 +95,7 @@ function renderCardHtml(state: CardState): string {
   if (state.status === 'complete' || state.status === 'error') {
     const statParts: string[] = [];
     if (state.model) {
-      statParts.push(state.model);
+      statParts.push(state.model.replace(/^claude-/, ''));
     }
     if (state.thinking) {
       statParts.push(`thinking:${state.thinking}`);
@@ -107,7 +107,15 @@ function renderCardHtml(state: CardState): string {
       statParts.push(`${(state.durationMs / 1000).toFixed(1)}s`);
     }
     if (state.costUsd !== undefined) {
-      statParts.push(`$${state.costUsd.toFixed(4)}`);
+      statParts.push(`$${state.costUsd.toFixed(2)}`);
+    }
+    if (state.totalTokens && state.contextWindow) {
+      const pct = Math.round((state.totalTokens / state.contextWindow) * 100);
+      const tokensK = state.totalTokens >= 1000
+        ? `${(state.totalTokens / 1000).toFixed(1)}k`
+        : `${state.totalTokens}`;
+      const ctxK = `${Math.round(state.contextWindow / 1000)}k`;
+      statParts.push(`${tokensK}/${ctxK} (${pct}%)`);
     }
     if (statParts.length > 0) {
       parts.push('');

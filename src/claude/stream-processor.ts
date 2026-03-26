@@ -43,6 +43,9 @@ export class StreamProcessor {
   private _autoRespondTools: AutoRespondTool[] = [];
   private _planFilePath: string | null = null;
   private _config: StreamProcessorConfig;
+  private _model: string | undefined;
+  private _totalTokens: number | undefined;
+  private _contextWindow: number | undefined;
 
   constructor(
     private userPrompt: string,
@@ -331,17 +334,40 @@ export class StreamProcessor {
       this.numTurns = message.num_turns;
     }
 
+    // Extract model usage info (per-model breakdown from SDK)
+    if (message.modelUsage) {
+      const models = Object.keys(message.modelUsage);
+      if (models.length > 0) {
+        // Primary model is the one with highest cost
+        const primaryModel = models.reduce((a, b) =>
+          (message.modelUsage![a].costUSD ?? 0) >= (message.modelUsage![b].costUSD ?? 0) ? a : b
+        );
+        const mu = message.modelUsage[primaryModel];
+        this._model = primaryModel;
+        this._contextWindow = mu.contextWindow;
+        // Sum tokens across all models
+        let totalTokens = 0;
+        for (const m of models) {
+          totalTokens += (message.modelUsage![m].inputTokens ?? 0) + (message.modelUsage![m].outputTokens ?? 0);
+        }
+        this._totalTokens = totalTokens;
+      }
+    }
+
     // Mark all tools as done
     for (const tool of this.toolCalls) {
       tool.status = 'done';
     }
 
+    const resultText = message.result || this.responseText;
     const isError = message.subtype !== 'success';
+    // SDK sometimes wraps API errors as "success" with the error text as result
+    const isApiError = !isError && isApiErrorResult(resultText);
 
     return {
-      status: isError ? 'error' : 'complete',
+      status: (isError || isApiError) ? 'error' : 'complete',
       userPrompt: this.userPrompt,
-      responseText: message.result || this.responseText,
+      responseText: isApiError ? '' : resultText,
       thinkingText: this.thinkingText || undefined,
       toolCalls: [...this.toolCalls],
       toolSummaries: this.toolSummaries.length > 0 ? [...this.toolSummaries] : undefined,
@@ -351,13 +377,15 @@ export class StreamProcessor {
       durationMs: this.durationMs,
       errorMessage: isError
         ? (message.errors?.join('; ') || `Ended with: ${message.subtype}`)
-        : undefined,
-      model: this._config.model,
+        : isApiError ? resultText : undefined,
+      model: this._model || this._config.model,
       thinking: this._config.thinking,
       effort: this._config.effort,
       sessionId: this.sessionId,
       workingDirectory: this.workingDirectory,
       numTurns: this.numTurns,
+      totalTokens: this._totalTokens,
+      contextWindow: this._contextWindow,
     };
   }
 
@@ -556,4 +584,10 @@ function extractToolOutput(content: unknown): string {
   } catch {
     return '';
   }
+}
+
+/** Detect API error responses that the SDK wraps as successful results */
+function isApiErrorResult(text: string): boolean {
+  if (!text) return false;
+  return /^API Error:\s*\d{3}\s/i.test(text);
 }

@@ -126,6 +126,42 @@ Prerequisites: Node.js 20+, [Claude Code CLI](https://github.com/anthropics/clau
 3. Start MetaBot, then enable persistent connection + `im.message.receive_v1` event
 4. Publish the app
 
+## Feishu Usage Tips
+
+### DM vs Group Chat
+
+| Scenario | @mention | Notes |
+|----------|----------|-------|
+| **Direct message** | Not needed | All messages go to the bot |
+| **1-on-1 group** (you + bot, 2 members) | Not needed | Auto-detected as DM-like |
+| **Multi-member group** | @Bot required | Only @mentioned messages trigger a response |
+
+> **Tip**: Create a 2-person group with just you and the bot. No @mention needed, plus you get group features like pinning and organization.
+
+### Sending Files & Images
+
+**DM / 2-person group**: Send files or images directly — the bot processes them automatically. Multiple files sent within 2 seconds are batched into a single request.
+
+**Multi-member group**: Feishu doesn't allow @mentioning while uploading files. Workaround: **upload first, @mention later**
+
+1. Upload your files/images in the group (no @mention needed)
+2. Within 5 minutes, @Bot with your instruction (e.g. "analyze these")
+3. The bot automatically attaches your previously uploaded files
+
+```
+[upload report.pdf]            ← upload first
+[upload screenshot.png]        ← multiple files ok
+@MetaBot analyze these files   ← then @Bot, files auto-attached
+```
+
+### Supported Message Types
+
+- **Text** — regular conversation
+- **Images** — auto-analyzed (Claude multimodal)
+- **Files** — PDF, code, documents, etc.
+- **Rich text** — Feishu Post format (text + images)
+- **Batch upload** — multiple files/images sent in quick succession are merged
+
 ## What You Can Build
 
 - **Solo AI developer** — full Claude Code from your phone via Feishu/Telegram/WeChat, bound to your project
