@@ -44,12 +44,17 @@ export interface CardState {
   errorMessage?: string;
   retryInfo?: string;
   pendingQuestion?: PendingQuestion;
+  /** Primary model used (e.g. "claude-opus-4-6") */
   model?: string;
   thinking?: string;
   effort?: string;
   sessionId?: string;
   workingDirectory?: string;
   numTurns?: number;
+  /** Total input+output tokens consumed */
+  totalTokens?: number;
+  /** Context window size of the primary model */
+  contextWindow?: number;
 }
 
 export interface IncomingMessage {
