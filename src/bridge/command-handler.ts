@@ -47,6 +47,7 @@ export class CommandHandler {
           '`/stop` - Abort current running task',
           '`/status` - Show current session info',
           '`/memory` - Memory document commands',
+          '`/model [opus|sonnet|haiku]` - View or switch Claude model',
           '`/effort [low|medium|high|max]` - View or switch effort level',
           '`/help` - Show this help message',
           '',
@@ -98,6 +99,23 @@ export class CommandHandler {
           `**Model:** \`${this.config.claude.model || 'default'}\``,
           `**Effort:** ${this.config.claude.effort || 'max'}`,
         ].join('\n'));
+        return true;
+      }
+
+      case '/model': {
+        const VALID_MODELS = ['opus', 'sonnet', 'haiku'] as const;
+        const arg = text.slice('/model'.length).trim().toLowerCase();
+        if (!arg) {
+          const current = this.config.claude.model || 'default';
+          await this.sender.sendTextNotice(chatId, '🤖 Model', `Current: **${current}**\n\nUsage: \`/model opus|sonnet|haiku\``, 'blue');
+        } else if (VALID_MODELS.includes(arg as any)) {
+          const prev = this.config.claude.model || 'default';
+          this.config.claude.model = arg;
+          this.sessionManager.resetSession(chatId);
+          await this.sender.sendTextNotice(chatId, '✅ Model Changed', `**${prev}** → **${arg}**\nSession reset to apply new model.`, 'green');
+        } else {
+          await this.sender.sendTextNotice(chatId, '❌ Invalid Model', `\`${arg}\` is not valid. Use: \`opus\`, \`sonnet\`, or \`haiku\``, 'red');
+        }
         return true;
       }
 
