@@ -70,6 +70,8 @@ Feishu/TG/WeChat → IM Bridge → Claude Code Agent SDK → Streaming card upda
 
 Full-featured browser-based chat interface. Access at `https://your-server/web/` after starting MetaBot.
 
+![MetaBot Web UI](resources/web-ui.png)
+
 - **Real-time streaming** -- WebSocket, Markdown rendering, tool call display
 - **Phone call mode** -- Tap phone icon for fullscreen hands-free voice conversation with VAD
 - **RTC calls** -- Two-way voice/video calls via VolcEngine RTC

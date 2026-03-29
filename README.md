@@ -74,6 +74,8 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 
 浏览器端全功能聊天界面，部署即可用。访问地址：`https://your-server/web/`
 
+![MetaBot Web UI](resources/web-ui.png)
+
 - **实时流式聊天** — WebSocket 推送，Markdown 渲染，工具调用展示
 - **电话语音模式** — 点击电话图标，全屏免手对话，VAD 自动检测说完
 - **RTC 实时通话** — 基于火山引擎 RTC 的双向语音/视频通话
