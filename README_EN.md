@@ -234,7 +234,7 @@ Supported: text, images (Claude multimodal), files (PDF/code/docs), rich text (P
 |----------|---------|-------------|
 | `BOTS_CONFIG` | — | Path to `bots.json` |
 | `API_PORT` | 9100 | HTTP API port |
-| `API_SECRET` | — | Bearer token auth |
+| `API_SECRET` | — | Bearer token auth. Generate one with `openssl rand -hex 32` |
 | `MEMORY_ENABLED` | true | Enable MetaMemory |
 | `MEMORY_PORT` | 8100 | MetaMemory port |
 | `MEMORY_ADMIN_TOKEN` | — | Admin token (full access) |
@@ -242,9 +242,9 @@ Supported: text, images (Claude multimodal), files (PDF/code/docs), rich text (P
 | `WIKI_SYNC_ENABLED` | true | Enable MetaMemory→Wiki sync |
 | `WIKI_SPACE_NAME` | MetaMemory | Wiki space name |
 | `WIKI_AUTO_SYNC` | true | Auto-sync on changes |
-| `METABOT_URL` | `http://localhost:9100` | MetaBot API URL |
-| `META_MEMORY_URL` | `http://localhost:8100` | MetaMemory server URL |
-| `METABOT_PEERS` | — | Peer MetaBot URLs (comma-separated) |
+| `METABOT_URL` | `http://localhost:9100` | MetaBot API URL. Default is local HTTP; for remote access prefer HTTPS or a private-network address |
+| `META_MEMORY_URL` | `http://localhost:8100` | MetaMemory server URL. Default is local HTTP; for remote access prefer HTTPS or a private-network address |
+| `METABOT_PEERS` | — | Peer MetaBot URLs (comma-separated). Prefer HTTPS for internet-reachable peers |
 | `LOG_LEVEL` | info | Log level |
 
 </details>
