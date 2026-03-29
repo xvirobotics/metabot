@@ -7,6 +7,11 @@ import * as path from 'node:path';
 export interface BotConfigBase {
   name: string;
   description?: string;
+  specialties?: string[];
+  icon?: string;
+  maxConcurrentTasks?: number;
+  budgetLimitDaily?: number;
+  ttsVoice?: string;
   claude: {
     defaultWorkingDirectory: string;
     maxTurns: number | undefined;
@@ -53,6 +58,7 @@ export interface PeerConfig {
 export interface AppConfig {
   feishuBots: BotConfig[];
   telegramBots: TelegramBotConfig[];
+  webBots: BotConfigBase[];
   wechatBots: WechatBotConfig[];
   /** Dedicated Feishu service app for wiki sync & doc reader (independent of chat bots). */
   feishuService?: {
@@ -100,6 +106,11 @@ function expandUserPath(value: string): string {
 export interface FeishuBotJsonEntry {
   name: string;
   description?: string;
+  specialties?: string[];
+  icon?: string;
+  maxConcurrentTasks?: number;
+  budgetLimitDaily?: number;
+  ttsVoice?: string;
   feishuAppId: string;
   feishuAppSecret: string;
   defaultWorkingDirectory: string;
@@ -115,6 +126,11 @@ function feishuBotFromJson(entry: FeishuBotJsonEntry): BotConfig {
   return {
     name: entry.name,
     ...(entry.description ? { description: entry.description } : {}),
+    ...(entry.specialties?.length ? { specialties: entry.specialties } : {}),
+    ...(entry.icon ? { icon: entry.icon } : {}),
+    ...(entry.maxConcurrentTasks != null ? { maxConcurrentTasks: entry.maxConcurrentTasks } : {}),
+    ...(entry.budgetLimitDaily != null ? { budgetLimitDaily: entry.budgetLimitDaily } : {}),
+    ...(entry.ttsVoice ? { ttsVoice: entry.ttsVoice } : {}),
     feishu: {
       appId: entry.feishuAppId,
       appSecret: entry.feishuAppSecret,
@@ -128,6 +144,11 @@ function feishuBotFromJson(entry: FeishuBotJsonEntry): BotConfig {
 export interface TelegramBotJsonEntry {
   name: string;
   description?: string;
+  specialties?: string[];
+  icon?: string;
+  maxConcurrentTasks?: number;
+  budgetLimitDaily?: number;
+  ttsVoice?: string;
   telegramBotToken: string;
   defaultWorkingDirectory: string;
   maxTurns?: number;
@@ -142,9 +163,45 @@ function telegramBotFromJson(entry: TelegramBotJsonEntry): TelegramBotConfig {
   return {
     name: entry.name,
     ...(entry.description ? { description: entry.description } : {}),
+    ...(entry.specialties?.length ? { specialties: entry.specialties } : {}),
+    ...(entry.icon ? { icon: entry.icon } : {}),
+    ...(entry.maxConcurrentTasks != null ? { maxConcurrentTasks: entry.maxConcurrentTasks } : {}),
+    ...(entry.budgetLimitDaily != null ? { budgetLimitDaily: entry.budgetLimitDaily } : {}),
+    ...(entry.ttsVoice ? { ttsVoice: entry.ttsVoice } : {}),
     telegram: {
       botToken: entry.telegramBotToken,
     },
+    claude: buildClaudeConfig(entry),
+  };
+}
+
+// --- Web bot JSON entry (used in bots.json — no IM credentials needed) ---
+
+export interface WebBotJsonEntry {
+  name: string;
+  description?: string;
+  specialties?: string[];
+  icon?: string;
+  maxConcurrentTasks?: number;
+  budgetLimitDaily?: number;
+  ttsVoice?: string;
+  defaultWorkingDirectory: string;
+  maxTurns?: number;
+  maxBudgetUsd?: number;
+  model?: string;
+  outputsBaseDir?: string;
+  downloadsDir?: string;
+}
+
+export function webBotFromJson(entry: WebBotJsonEntry): BotConfigBase {
+  return {
+    name: entry.name,
+    ...(entry.description ? { description: entry.description } : {}),
+    ...(entry.specialties?.length ? { specialties: entry.specialties } : {}),
+    ...(entry.icon ? { icon: entry.icon } : {}),
+    ...(entry.maxConcurrentTasks != null ? { maxConcurrentTasks: entry.maxConcurrentTasks } : {}),
+    ...(entry.budgetLimitDaily != null ? { budgetLimitDaily: entry.budgetLimitDaily } : {}),
+    ...(entry.ttsVoice ? { ttsVoice: entry.ttsVoice } : {}),
     claude: buildClaudeConfig(entry),
   };
 }
@@ -194,8 +251,8 @@ function buildClaudeConfig(entry: {
     maxBudgetUsd: entry.maxBudgetUsd ?? (process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined),
     model: entry.model || process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || 'claude-opus-4-6',
     apiKey: entry.apiKey || undefined,
-    outputsBaseDir: expandUserPath(entry.outputsBaseDir || process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), 'metabot-outputs')),
-    downloadsDir: expandUserPath(entry.downloadsDir || process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), 'metabot-downloads')),
+    outputsBaseDir: entry.outputsBaseDir || process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), `metabot-outputs-${os.userInfo().username}`),
+    downloadsDir: entry.downloadsDir || process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), 'metabot-downloads'),
   };
 }
 
@@ -214,8 +271,8 @@ function feishuBotFromEnv(): BotConfig {
       maxBudgetUsd: process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined,
       model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
       apiKey: undefined,
-      outputsBaseDir: expandUserPath(process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), 'metabot-outputs')),
-      downloadsDir: expandUserPath(process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), 'metabot-downloads')),
+      outputsBaseDir: process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), `metabot-outputs-${os.userInfo().username}`),
+      downloadsDir: process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), 'metabot-downloads'),
     },
   };
 }
@@ -232,8 +289,8 @@ function telegramBotFromEnv(): TelegramBotConfig {
       maxBudgetUsd: process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined,
       model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
       apiKey: undefined,
-      outputsBaseDir: expandUserPath(process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), 'metabot-outputs')),
-      downloadsDir: expandUserPath(process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), 'metabot-downloads')),
+      outputsBaseDir: process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), `metabot-outputs-${os.userInfo().username}`),
+      downloadsDir: process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), 'metabot-downloads'),
     },
   };
 }
@@ -267,6 +324,7 @@ export interface PeerJsonEntry {
 export interface BotsJsonNewFormat {
   feishuBots?: FeishuBotJsonEntry[];
   telegramBots?: TelegramBotJsonEntry[];
+  webBots?: WebBotJsonEntry[];
   wechatBots?: WechatBotJsonEntry[];
   peers?: PeerJsonEntry[];
 }
@@ -276,6 +334,7 @@ export function loadAppConfig(): AppConfig {
 
   let feishuBots: BotConfig[] = [];
   let telegramBots: TelegramBotConfig[] = [];
+  let webBots: BotConfigBase[] = [];
   let wechatBots: WechatBotConfig[] = [];
   let parsedConfig: unknown;
 
@@ -292,7 +351,7 @@ export function loadAppConfig(): AppConfig {
       }
       feishuBots = (parsed as FeishuBotJsonEntry[]).map(feishuBotFromJson);
     } else if (parsed && typeof parsed === 'object') {
-      // New format: { feishuBots: [...], telegramBots: [...] }
+      // New format: { feishuBots: [...], telegramBots: [...], webBots: [...] }
       const cfg = parsed as BotsJsonNewFormat;
       if (cfg.feishuBots) {
         feishuBots = cfg.feishuBots.map(feishuBotFromJson);
@@ -300,10 +359,13 @@ export function loadAppConfig(): AppConfig {
       if (cfg.telegramBots) {
         telegramBots = cfg.telegramBots.map(telegramBotFromJson);
       }
+      if (cfg.webBots) {
+        webBots = cfg.webBots.map(webBotFromJson);
+      }
       if (cfg.wechatBots) {
         wechatBots = cfg.wechatBots.map(wechatBotFromJson);
       }
-      if (feishuBots.length === 0 && telegramBots.length === 0 && wechatBots.length === 0) {
+      if (feishuBots.length === 0 && telegramBots.length === 0 && webBots.length === 0 && wechatBots.length === 0) {
         throw new Error(`BOTS_CONFIG file must define at least one bot: ${resolved}`);
       }
     } else {
@@ -383,6 +445,7 @@ export function loadAppConfig(): AppConfig {
   return {
     feishuBots,
     telegramBots,
+    webBots,
     wechatBots,
     feishuService,
     log: {
