@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import type * as http from 'node:http';
-import { addBot, removeBot, getBotEntry } from '../bots-config-writer.js';
+import { addBot, removeBot, updateBot, getBotEntry } from '../bots-config-writer.js';
 import { installSkillsToWorkDir } from '../skills-installer.js';
 import { webBotFromJson } from '../../config.js';
 import { NullSender } from '../../web/null-sender.js';
@@ -149,6 +149,29 @@ export async function handleBotRoutes(
         throw err;
       }
     }
+    return true;
+  }
+
+  // PUT /api/bots/:name — update an existing bot
+  if (method === 'PUT' && url.startsWith('/api/bots/')) {
+    const name = decodeURIComponent(url.slice('/api/bots/'.length));
+    if (!name) {
+      jsonResponse(res, 400, { error: 'Missing bot name' });
+      return true;
+    }
+    if (!botsConfigPath) {
+      jsonResponse(res, 400, { error: 'Bot CRUD requires BOTS_CONFIG to be set' });
+      return true;
+    }
+    const body = await parseJsonBody(req);
+    const updated = updateBot(botsConfigPath, name, body);
+    if (!updated) {
+      jsonResponse(res, 404, { error: `Bot not found: ${name}` });
+      return true;
+    }
+    logger.info({ name, updates: Object.keys(body) }, 'Bot config updated');
+    ws.handle?.broadcastBotList();
+    jsonResponse(res, 200, { name, updated: true });
     return true;
   }
 

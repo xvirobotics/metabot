@@ -1,4 +1,7 @@
+import { useState, useCallback } from 'react';
 import { useStore } from '../store';
+import type { BotInfo } from '../types';
+import { BotManageDialog } from './BotManageDialog';
 import styles from './SettingsView.module.css';
 
 export function SettingsView() {
@@ -12,6 +15,31 @@ export function SettingsView() {
   const bots = useStore((s) => s.bots);
   const sessions = useStore((s) => s.sessions);
   const clearSessions = useStore((s) => s.clearSessions);
+
+  const [dialogMode, setDialogMode] = useState<'create' | 'edit' | null>(null);
+  const [editBot, setEditBot] = useState<BotInfo | undefined>();
+
+  const handleCreateBot = useCallback(() => {
+    setEditBot(undefined);
+    setDialogMode('create');
+  }, []);
+
+  const handleEditBot = useCallback((bot: BotInfo) => {
+    setEditBot(bot);
+    setDialogMode('edit');
+  }, []);
+
+  const handleDeleteBot = useCallback(async (botName: string) => {
+    if (!window.confirm(`Delete bot "${botName}"? This cannot be undone.`)) return;
+    try {
+      await fetch(`/api/bots/${encodeURIComponent(botName)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {
+      // ignore — bot list will update via WS
+    }
+  }, [token]);
 
   const maskedToken = token
     ? `${token.slice(0, 6)}${'*'.repeat(Math.min(token.length - 6, 20))}`
@@ -112,9 +140,17 @@ export function SettingsView() {
 
       {/* Bots */}
       <div className={styles.section}>
-        <h2 className={styles.sectionTitle}>
-          Bots ({bots.length})
-        </h2>
+        <div className={styles.sectionHeader}>
+          <h2 className={styles.sectionTitle}>
+            Bots ({bots.length})
+          </h2>
+          <button
+            className={`${styles.btn} ${styles.btnAccent}`}
+            onClick={handleCreateBot}
+          >
+            + Add Bot
+          </button>
+        </div>
         <div className={styles.card}>
           {bots.length === 0 ? (
             <div className={styles.cardItem}>
@@ -149,6 +185,20 @@ export function SettingsView() {
                         {bot.description}
                       </div>
                     )}
+                  </div>
+                  <div className={styles.botActions}>
+                    <button
+                      className={`${styles.btn} ${styles.btnSmall} ${styles.btnOutline}`}
+                      onClick={() => handleEditBot(bot)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className={`${styles.btn} ${styles.btnSmall} ${styles.btnDanger}`}
+                      onClick={() => handleDeleteBot(bot.name)}
+                    >
+                      Delete
+                    </button>
                   </div>
                 </div>
               ))}
@@ -198,6 +248,15 @@ export function SettingsView() {
           Claude Code
         </a>
       </div>
+
+      {/* Bot manage dialog */}
+      {dialogMode && (
+        <BotManageDialog
+          mode={dialogMode}
+          bot={editBot}
+          onClose={() => setDialogMode(null)}
+        />
+      )}
     </div>
   );
 }
