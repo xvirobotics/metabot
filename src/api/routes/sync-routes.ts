@@ -88,9 +88,9 @@ export async function handleSyncRoutes(
     return true;
   }
 
-  // GET /api/feishu/document — deprecated, use lark-cli (fd read <url>)
+  // GET /api/feishu/document — deprecated, use lark-cli (lark-doc skill)
   if (method === 'GET' && url.startsWith('/api/feishu/document')) {
-    jsonResponse(res, 501, { error: 'Use lark-cli (fd read <url>) to read Feishu documents.' });
+    jsonResponse(res, 501, { error: 'Use lark-cli (lark-doc skill) to read Feishu documents.' });
     return true;
   }
 

@@ -15,7 +15,7 @@
     "lint:fix": "eslint src/ tests/ --fix",
     "format": "prettier --write 'src/**/*.ts' 'tests/**/*.ts'",
     "format:check": "prettier --check 'src/**/*.ts' 'tests/**/*.ts'",
-    "update-cli": "for cli in mb mm metabot fd; do [ -f bin/$cli ] && cp bin/$cli ~/.local/bin/$cli && chmod +x ~/.local/bin/$cli && echo \"Updated: $cli\"; done"
+    "update-cli": "for cli in mb mm metabot; do [ -f bin/$cli ] && cp bin/$cli ~/.local/bin/$cli && chmod +x ~/.local/bin/$cli && echo \"Updated: $cli\"; done"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.92",
