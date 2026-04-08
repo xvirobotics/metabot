@@ -129,34 +129,96 @@ export class RtcVoiceChatService {
     const userId = `user-${crypto.randomUUID().slice(0, 8)}`;
     const aiUserId = `ai-${crypto.randomUUID().slice(0, 8)}`;
 
-    // LLM: prefer EndPointId if set, otherwise use ModelName
-    const llmEndpointId = params.llmEndpointId || process.env.VOLC_RTC_LLM_ENDPOINT_ID || '';
-    const llmModelName = process.env.VOLC_RTC_LLM_MODEL_NAME || 'doubao-seed-1-6-flash-250828';
+    // S2S (end-to-end speech model) credentials
+    const s2sAppId = process.env.VOLC_RTC_S2S_APP_ID || '';
+    const s2sAccessToken = process.env.VOLC_RTC_S2S_ACCESS_TOKEN || '';
 
-    // ASR — dedicated ASR credentials from speech recognition console
-    const asrAppId = process.env.VOLC_RTC_ASR_APP_ID || process.env.VOLCENGINE_TTS_APPID || '';
-    const asrCluster = process.env.VOLC_RTC_ASR_CLUSTER || 'volcengine_streaming_common';
+    // TTS voice for ASR+LLM+TTS mode
+    const ttsVoice = params.ttsVoice || process.env.VOLC_RTC_TTS_VOICE || 'zh_female_yuanqinvyou_moon_bigtts';
 
-    // TTS
-    const ttsAppId = process.env.VOLCENGINE_TTS_APPID || '';
-    const ttsAccessKey = process.env.VOLCENGINE_TTS_ACCESS_KEY || '';
-    const ttsVoice = params.ttsVoice || process.env.VOLC_RTC_TTS_VOICE || 'zh_female_wanwanxiaohe_moon_bigtts';
+    // Determine mode: S2S (lowest latency) or ASR+LLM+TTS (supports vision/custom LLM)
+    const useS2S = !!(s2sAppId && s2sAccessToken);
 
-    // Build LLM config — use EndPointId if available, otherwise ModelName
-    const llmConfig: Record<string, unknown> = {
-      Mode: 'ArkV3',
-      SystemMessages: params.systemPrompt ? [params.systemPrompt] : [],
-      Temperature: params.temperature ?? 0.7,
-      MaxTokens: params.maxTokens ?? 1024,
-      HistoryLength: 15,
-    };
-    if (llmEndpointId) {
-      llmConfig.EndPointId = llmEndpointId;
+    let config: Record<string, unknown>;
+
+    if (useS2S) {
+      // S2S: end-to-end speech model — lowest latency, voice-only
+      config = {
+        S2SConfig: {
+          Provider: 'volcano',
+          OutputMode: 0,
+          ProviderParams: {
+            app: {
+              appid: s2sAppId,
+              token: s2sAccessToken,
+            },
+          },
+        },
+        InterruptMode: 0,
+        SubtitleConfig: {
+          SubtitleMode: 1,
+        },
+        NoiseReductionConfig: {
+          Enable: true,
+        },
+      };
     } else {
-      llmConfig.ModelName = llmModelName;
+      // ASR+LLM+TTS pipeline — fallback when S2S not configured
+      const llmEndpointId = params.llmEndpointId || process.env.VOLC_RTC_LLM_ENDPOINT_ID || '';
+      const llmModelName = process.env.VOLC_RTC_LLM_MODEL_NAME || 'doubao-seed-1-6-flash-250828';
+
+      const llmConfig: Record<string, unknown> = {
+        Mode: 'ArkV3',
+        SystemMessages: params.systemPrompt ? [params.systemPrompt] : [],
+        Temperature: params.temperature ?? 0.7,
+        MaxTokens: params.maxTokens ?? 1024,
+        HistoryLength: 10,
+        ThinkingType: 'disabled',
+      };
+      if (llmEndpointId) {
+        llmConfig.EndPointId = llmEndpointId;
+      } else {
+        llmConfig.ModelName = llmModelName;
+      }
+
+      config = {
+        ASRConfig: {
+          Provider: 'volcano',
+          ProviderParams: {
+            Mode: 'bigmodel',
+          },
+          VADConfig: {
+            SilenceTime: 600,
+          },
+          InterruptConfig: {
+            InterruptSpeechDuration: 0,
+          },
+        },
+        LLMConfig: llmConfig,
+        TTSConfig: {
+          Provider: 'volcano_bidirection',
+          ProviderParams: {
+            Credential: {
+              ResourceId: 'seed-tts-1.0',
+            },
+            VolcanoTTSParameters: JSON.stringify({
+              req_params: {
+                speaker: ttsVoice,
+                audio_params: { speech_rate: 0, loudness_rate: 0 },
+                additions: { post_process: { pitch: 0 } },
+              },
+            }),
+          },
+        },
+        InterruptMode: 0,
+        SubtitleConfig: {
+          DisableRTSSubtitle: false,
+          SubtitleMode: 0,
+        },
+      };
     }
 
-    // Build StartVoiceChat request — matches official rtc-aigc-demo config
+    // Build StartVoiceChat request
     const requestBody = {
       AppId: appId,
       RoomId: roomId,
@@ -165,50 +227,18 @@ export class RtcVoiceChatService {
         UserId: aiUserId,
         TargetUserId: [userId],
         WelcomeMessage: params.welcomeMessage || '你好，有什么可以帮你的吗？',
-        AnsMode: 3,
       },
-      Config: {
-        ASRConfig: {
-          Provider: 'volcano',
-          ProviderParams: {
-            Mode: 'smallmodel',
-            AppId: asrAppId,
-            Cluster: asrCluster,
-          },
-        },
-        LLMConfig: llmConfig,
-        TTSConfig: {
-          Provider: 'volcano',
-          ProviderParams: {
-            app: {
-              appid: ttsAppId,
-              cluster: 'volcano_tts',
-              token: ttsAccessKey,
-            },
-            audio: {
-              voice_type: ttsVoice,
-              speed_ratio: 1,
-              pitch_ratio: 1,
-              volume_ratio: 1,
-            },
-          },
-        },
-        InterruptMode: 0,
-        SubtitleConfig: {},
-        NoiseReductionConfig: {
-          Enable: true,
-        },
-      },
+      Config: config,
     };
 
-    this.logger.info({ sessionId, roomId, taskId, aiUserId, asrAppId: asrAppId ? 'set' : 'empty' }, 'Starting RTC voice chat');
+    this.logger.info({ sessionId, roomId, taskId, aiUserId, mode: useS2S ? 'S2S' : 'ASR+LLM+TTS' }, 'Starting RTC voice chat');
 
     // Call Volcengine StartVoiceChat OpenAPI
     const service = this.getService();
     const startVoiceChat = service.createAPI('StartVoiceChat', {
       method: 'POST',
       contentType: 'json',
-      Version: '2024-12-01',
+      Version: '2025-06-01',
     });
 
     const response = await startVoiceChat(requestBody);
@@ -262,7 +292,7 @@ export class RtcVoiceChatService {
       const stopVoiceChat = service.createAPI('StopVoiceChat', {
         method: 'POST',
         contentType: 'json',
-        Version: '2024-12-01',
+        Version: '2025-06-01',
       });
 
       await stopVoiceChat({
