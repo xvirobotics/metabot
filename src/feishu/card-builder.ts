@@ -1,6 +1,7 @@
 // Re-export shared types so existing imports from this module continue to work
 export type { CardStatus, ToolCall, PendingQuestion, CardState } from '../types.js';
 import type { CardState, CardStatus } from '../types.js';
+import { optimizeMarkdownStyle, sanitizeTextForCard } from './markdown-style.js';
 
 const STATUS_CONFIG: Record<CardStatus, { color: string; title: string; icon: string }> = {
   thinking: { color: 'blue', title: 'Thinking...', icon: '🔵' },
@@ -41,9 +42,11 @@ export function buildCard(state: CardState): string {
 
   // Response content
   if (state.responseText) {
+    // Apply: sanitizeTextForCard → optimizeMarkdownStyle → truncateContent
+    const processed = truncateContent(optimizeMarkdownStyle(sanitizeTextForCard(state.responseText)));
     elements.push({
       tag: 'markdown',
-      content: truncateContent(state.responseText),
+      content: processed,
     });
   } else if (state.status === 'thinking') {
     elements.push({
@@ -101,18 +104,15 @@ export function buildCard(state: CardState): string {
     }
     if (parts.length > 0) {
       elements.push({
-        tag: 'note',
-        elements: [
-          {
-            tag: 'plain_text',
-            content: parts.join(' | '),
-          },
-        ],
+        tag: 'markdown',
+        content: `<font color="grey">${parts.join(' · ')}</font>`,
+        text_size: 'notation_small_v2',
       });
     }
   }
 
   const card = {
+    schema: '2.0',
     config: { wide_screen_mode: true },
     header: {
       template: config.color,
@@ -121,7 +121,7 @@ export function buildCard(state: CardState): string {
         tag: 'plain_text',
       },
     },
-    elements,
+    body: { elements },
   };
 
   return JSON.stringify(card);
@@ -129,6 +129,7 @@ export function buildCard(state: CardState): string {
 
 export function buildHelpCard(): string {
   const card = {
+    schema: '2.0',
     config: { wide_screen_mode: true },
     header: {
       template: 'blue',
@@ -137,28 +138,30 @@ export function buildHelpCard(): string {
         tag: 'plain_text',
       },
     },
-    elements: [
-      {
-        tag: 'markdown',
-        content: [
-          '**Available Commands:**',
-          '`/reset` - Clear session, start fresh',
-          '`/stop` - Abort current running task',
-          '`/status` - Show current session info',
-          '`/memory` - Memory document commands',
-          '`/help` - Show this help message',
-          '',
-          '**Usage:**',
-          'Send any text message to start a conversation with Claude Code.',
-          'Each chat has an independent session with a fixed working directory.',
-          '',
-          '**Memory Commands:**',
-          '`/memory list` - Show folder tree',
-          '`/memory search <query>` - Search documents',
-          '`/memory status` - Server health check',
-        ].join('\n'),
-      },
-    ],
+    body: {
+      elements: [
+        {
+          tag: 'markdown',
+          content: [
+            '**Available Commands:**',
+            '`/reset` - Clear session, start fresh',
+            '`/stop` - Abort current running task',
+            '`/status` - Show current session info',
+            '`/memory` - Memory document commands',
+            '`/help` - Show this help message',
+            '',
+            '**Usage:**',
+            'Send any text message to start a conversation with Claude Code.',
+            'Each chat has an independent session with a fixed working directory.',
+            '',
+            '**Memory Commands:**',
+            '`/memory list` - Show folder tree',
+            '`/memory search <query>` - Search documents',
+            '`/memory status` - Server health check',
+          ].join('\n'),
+        },
+      ],
+    },
   };
   return JSON.stringify(card);
 }
@@ -170,6 +173,7 @@ export function buildStatusCard(
   isRunning: boolean,
 ): string {
   const card = {
+    schema: '2.0',
     config: { wide_screen_mode: true },
     header: {
       template: 'blue',
@@ -178,23 +182,26 @@ export function buildStatusCard(
         tag: 'plain_text',
       },
     },
-    elements: [
-      {
-        tag: 'markdown',
-        content: [
-          `**User:** \`${userId}\``,
-          `**Working Directory:** \`${workingDirectory}\``,
-          `**Session:** ${sessionId ? `\`${sessionId.slice(0, 8)}...\`` : '_None_'}`,
-          `**Running:** ${isRunning ? 'Yes ⏳' : 'No'}`,
-        ].join('\n'),
-      },
-    ],
+    body: {
+      elements: [
+        {
+          tag: 'markdown',
+          content: [
+            `**User:** \`${userId}\``,
+            `**Working Directory:** \`${workingDirectory}\``,
+            `**Session:** ${sessionId ? `\`${sessionId.slice(0, 8)}...\`` : '_None_'}`,
+            `**Running:** ${isRunning ? 'Yes ⏳' : 'No'}`,
+          ].join('\n'),
+        },
+      ],
+    },
   };
   return JSON.stringify(card);
 }
 
 export function buildTextCard(title: string, content: string, color: string = 'blue'): string {
   const card = {
+    schema: '2.0',
     config: { wide_screen_mode: true },
     header: {
       template: color,
@@ -203,12 +210,14 @@ export function buildTextCard(title: string, content: string, color: string = 'b
         tag: 'plain_text',
       },
     },
-    elements: [
-      {
-        tag: 'markdown',
-        content,
-      },
-    ],
+    body: {
+      elements: [
+        {
+          tag: 'markdown',
+          content: optimizeMarkdownStyle(content),
+        },
+      ],
+    },
   };
   return JSON.stringify(card);
 }
