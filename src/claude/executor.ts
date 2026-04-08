@@ -1,4 +1,6 @@
 import { execSync, spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { query } from '@anthropic-ai/claude-agent-sdk';
@@ -23,23 +25,44 @@ function resolveClaudePath(): string {
 const CLAUDE_EXECUTABLE = resolveClaudePath();
 
 /**
- * Env var prefixes to strip from the inherited process environment.
- * - CLAUDE*: prevents "nested session" errors from the SDK.
- * - ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN: ensures the child Claude Code
- *   process resolves auth from ~/.claude/.credentials.json (written by
- *   `cc switch`, `claude /login`, etc.) rather than stale PM2 env vars.
- *   Users who need a fixed API key can set `apiKey` in bots.json instead.
+ * Env var prefixes to always strip from the inherited process environment.
+ * CLAUDE*: prevents "nested session" errors from the SDK.
  */
-const FILTERED_ENV_PREFIXES = ['CLAUDE', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
+const ALWAYS_FILTERED_PREFIXES = ['CLAUDE'];
+
+/**
+ * Auth-related env vars that are only filtered when an explicit API key
+ * is provided in bots.json OR when ~/.claude/.credentials.json exists.
+ * This ensures users who rely solely on ANTHROPIC_API_KEY env var can
+ * still authenticate without configuring bots.json.
+ */
+const AUTH_ENV_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
+
+/**
+ * Check if Claude Code has credentials.json (OAuth login).
+ */
+function hasCredentialsFile(): boolean {
+  const credPath = path.join(os.homedir(), '.claude', '.credentials.json');
+  try {
+    return fs.existsSync(credPath);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Create a custom spawn function for cross-platform compatibility.
  * - Uses process.execPath (current Node binary) to avoid PATH issues on Windows.
- * - Filters CLAUDE* and ANTHROPIC auth env vars (see above).
+ * - Always filters CLAUDE* env vars to prevent nested session errors.
+ * - Filters ANTHROPIC auth env vars only when an explicit API key is provided
+ *   or credentials.json exists (so env-var-only users can still authenticate).
  * - Merges process.env so child inherits system PATH, TEMP, etc.
  * - Optionally injects an explicit ANTHROPIC_API_KEY from bots.json config.
  */
 function createSpawnFn(explicitApiKey?: string): (options: SpawnOptions) => SpawnedProcess {
+  // Decide once whether to filter auth env vars
+  const filterAuthVars = !!(explicitApiKey || hasCredentialsFile());
+
   return (options: SpawnOptions): SpawnedProcess => {
     const nodePath = process.execPath;
 
@@ -51,9 +74,10 @@ function createSpawnFn(explicitApiKey?: string): (options: SpawnOptions) => Spaw
     // Filter out env vars that interfere with auth or cause nested session errors
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(baseEnv)) {
-      if (value !== undefined && !FILTERED_ENV_PREFIXES.some(p => key.startsWith(p))) {
-        env[key] = value;
-      }
+      if (value === undefined) continue;
+      if (ALWAYS_FILTERED_PREFIXES.some(p => key.startsWith(p))) continue;
+      if (filterAuthVars && AUTH_ENV_VARS.some(v => key.startsWith(v))) continue;
+      env[key] = value;
     }
 
     // Inject explicit API key from bots.json (after filtering, so it takes effect)
