@@ -9,7 +9,6 @@ import type { CardState, PendingQuestion } from '../types.js';
 import type { PeerManager } from '../api/peer-manager.js';
 import { ChatSubscriptionManager } from './chat-subscriptions.js';
 import { GroupManager, type ChatGroup } from './group-manager.js';
-import type { PushService } from '../api/push-service.js';
 import { StreamingASRSession, createStreamingASRSession, isStreamingASRAvailable } from '../api/streaming-asr.js';
 import type { SessionRegistry, SessionRecord, SessionMessage } from '../session/session-registry.js';
 
@@ -28,6 +27,8 @@ type ClientMessage =
   | { type: 'list_sessions'; botName: string }
   | { type: 'adopt_session'; chatId: string; sessionId: string }
   | { type: 'get_session_history'; sessionId: string; since?: number }
+  | { type: 'rename_session'; chatId: string; title: string }
+  | { type: 'delete_session'; chatId: string }
   | { type: 'start_asr' }
   | { type: 'stop_asr' }
   | { type: 'ping' };
@@ -48,6 +49,8 @@ type ServerMessage =
   | { type: 'sessions_list'; botName: string; sessions: SessionRecord[] }
   | { type: 'session_adopted'; chatId: string; sessionId: string; claudeSessionId?: string; history: SessionMessage[] }
   | { type: 'session_history'; sessionId: string; messages: SessionMessage[] }
+  | { type: 'session_renamed'; chatId: string; title: string }
+  | { type: 'session_deleted'; chatId: string }
   | { type: 'asr_started' }
   | { type: 'asr_transcript'; text: string; isFinal: boolean }
   | { type: 'asr_error'; error: string }
@@ -113,7 +116,6 @@ export function setupWebSocketServer(
   logger: Logger,
   secret?: string,
   peerManager?: PeerManager,
-  pushService?: PushService,
   sessionRegistry?: SessionRegistry,
 ): WebSocketHandle {
   const wsLogger = logger.child({ module: 'ws' });
@@ -215,7 +217,7 @@ export function setupWebSocketServer(
         case 'chat':
           chatBotMap.set(msg.chatId, msg.botName);
           subscriptions.subscribe(msg.chatId, ws);
-          handleChat(ws, msg, registry, peerManager, pendingAnswers, wsLogger, pushService, subscriptions).catch((err) => {
+          handleChat(ws, msg, registry, peerManager, pendingAnswers, wsLogger, subscriptions).catch((err) => {
             wsLogger.error({ err, chatId: msg.chatId }, 'WS chat handler error');
             sendMessage(ws, { type: 'error', chatId: msg.chatId, messageId: msg.messageId, error: err.message || 'Internal error' });
           });
@@ -339,6 +341,32 @@ export function setupWebSocketServer(
           break;
         }
 
+        case 'rename_session': {
+          if (!sessionRegistry) {
+            sendMessage(ws, { type: 'error', chatId: msg.chatId, error: 'Session sync not available' });
+            break;
+          }
+          const session = sessionRegistry.findByChatId(msg.chatId);
+          if (session) {
+            sessionRegistry.renameSession(session.id, msg.title);
+            sendMessage(ws, { type: 'session_renamed', chatId: msg.chatId, title: msg.title });
+          }
+          break;
+        }
+
+        case 'delete_session': {
+          if (!sessionRegistry) {
+            sendMessage(ws, { type: 'error', chatId: msg.chatId, error: 'Session sync not available' });
+            break;
+          }
+          const delSession = sessionRegistry.findByChatId(msg.chatId);
+          if (delSession) {
+            sessionRegistry.deleteSession(delSession.id);
+            sendMessage(ws, { type: 'session_deleted', chatId: msg.chatId });
+          }
+          break;
+        }
+
         case 'start_asr': {
           // Destroy previous session if any
           if (asrSession) { asrSession.destroy(); asrSession = null; }
@@ -438,7 +466,6 @@ async function handleChat(
   peerManager: PeerManager | undefined,
   pendingAnswers: Map<string, { resolve: (answer: string) => void; reject: (err: Error) => void }>,
   logger: Logger,
-  pushService?: PushService,
   subscriptions?: ChatSubscriptionManager,
 ): Promise<void> {
   const { botName, chatId, text, messageId: clientMessageId } = msg;
@@ -478,15 +505,6 @@ async function handleChat(
         const msgId = clientMessageId || bridgeMessageId;
         // Cache state for reconnection recovery
         cacheState(chatId, msgId, state, final ? 'complete' : 'state');
-
-        if (final) {
-          // Always send push on completion, even if WS is disconnected
-          if (pushService?.isConfigured()) {
-            pushService.notifyTaskComplete(chatId, state, botName).catch((err: unknown) => {
-              logger.warn({ err, chatId }, 'Push notification failed');
-            });
-          }
-        }
 
         // Use subscriptions.broadcast so messages reach the client even after reconnect
         // (the captured `ws` may be stale if client reconnected during task execution)
@@ -535,13 +553,6 @@ async function handleChat(
         }
       },
       onQuestion: (question: PendingQuestion): Promise<string> => {
-        // Send push notification for pending question
-        if (pushService?.isConfigured()) {
-          pushService.notifyPendingQuestion(chatId, question?.questions?.[0]?.question || '', botName).catch((err: unknown) => {
-            logger.warn({ err, chatId }, 'Push notification failed');
-          });
-        }
-
         return new Promise<string>((resolve, reject) => {
           pendingAnswers.set(question.toolUseId, { resolve, reject });
 

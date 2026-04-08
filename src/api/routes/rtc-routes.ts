@@ -141,20 +141,6 @@ export async function handleRtcRoutes(
         logger.warn('No web clients connected to receive voice call notification');
       }
 
-      // Send push notification for incoming call (include call data for deep link)
-      if (ctx.pushService?.isConfigured() && chatId) {
-        ctx.pushService.notifyIncomingCall(chatId, botName || 'Voice Call', {
-          sessionId: result.sessionId,
-          roomId: result.roomId,
-          token: result.token,
-          appId: result.appId,
-          userId: result.userId,
-          aiUserId: result.aiUserId,
-        }).catch((err: unknown) => {
-          logger.warn({ err, chatId }, 'Push notification failed');
-        });
-      }
-
       // Check if caller wants to wait for completion
       const parsedUrl = new URL(url, 'http://localhost');
       const shouldWait = parsedUrl.searchParams.get('wait') === 'true';

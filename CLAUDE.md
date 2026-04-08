@@ -41,7 +41,7 @@ Web Browser → WebSocket (/ws) → ws-server.ts → MessageBridge.executeApiTas
 - **`src/memory/memory-client.ts`** — Lightweight HTTP client for the MetaMemory server. Used by `/memory` commands (list, search, status) for quick Feishu responses without spawning Claude.
 - **`src/claude/executor.ts`** — Wraps `query()` from the Agent SDK as an async generator yielding `SDKMessage`. Configures permissionMode, allowedTools, MCP settings, session resume.
 - **`src/claude/stream-processor.ts`** — Transforms the raw SDK message stream into `CardState` objects for display. Tracks tool calls, response text, session ID, cost/duration. Also extracts image file paths and plan file paths from tool outputs.
-- **`src/feishu/doc-reader.ts`** — Reads Feishu documents (docx/wiki) and converts Feishu blocks back to Markdown. Reverse of `markdown-to-blocks.ts`. Used by the `/api/feishu/document` endpoint and the `fd` CLI.
+- **`src/feishu/doc-reader.ts`** — Reads Feishu documents (docx/wiki) and converts Feishu blocks back to Markdown. Reverse of `markdown-to-blocks.ts`. Used by the `lark-doc` skill.
 - **`src/claude/session-manager.ts`** — In-memory sessions keyed by `chatId`. Each session has a fixed working directory (from bot config) and Claude session ID. Sessions expire after 24 hours.
 - **`src/feishu/card-builder.ts`** — Builds Feishu interactive card JSON. Cards have color-coded headers (blue=thinking/running, green=complete, red=error), tool call lists, markdown response content, and stats (cost/duration). Content truncated at 28KB.
 - **`src/feishu/message-sender.ts`** — Feishu API wrapper for sending/updating cards, uploading/downloading images, sending text.
@@ -90,13 +90,7 @@ One-way sync from MetaMemory documents to a Feishu Wiki space. The folder tree i
 
 ### Feishu Document Reading
 
-Read Feishu documents (standalone docx and wiki pages) and convert them to Markdown. Available via API and CLI.
-
-**API endpoint:** `GET /api/feishu/document?url=<feishu-url>&botName=<name>` or `?docId=<id>&botName=<name>`
-
-**CLI:** `fd read <url>`, `fd read-id <docId>`, `fd info <url>` (installed at `bin/fd`)
-
-**Skill:** `feishu-doc` — teaches Claude to use the `fd` CLI when users share Feishu document URLs.
+Read Feishu documents (standalone docx and wiki pages) and convert them to Markdown. Now handled by the `lark-doc` skill via lark-cli.
 
 **Key module:** `src/feishu/doc-reader.ts` — `FeishuDocReader` class that fetches blocks via `docx.v1.documentBlock.list` and converts them to Markdown (reverse of `markdown-to-blocks.ts`).
 

@@ -6,8 +6,6 @@ import type { TaskScheduler } from '../../scheduler/task-scheduler.js';
 import type { DocSync } from '../../sync/doc-sync.js';
 import type { PeerManager } from '../peer-manager.js';
 
-import type { PushService } from '../push-service.js';
-import type { DeviceStore } from '../device-store.js';
 import type { AsyncTaskStore } from '../async-task-store.js';
 import type { IntentRouter } from '../intent-router.js';
 import type { CircuitBreaker } from '../circuit-breaker.js';
@@ -18,6 +16,7 @@ import type { VoiceIdentityStore } from '../voice-identity.js';
 import type { RtcVoiceChatService } from '../rtc-voice-chat.js';
 import type { WebSocketHandle } from '../../web/ws-server.js';
 import type { SessionRegistry } from '../../session/session-registry.js';
+import type { ActivityStore } from '../activity-store.js';
 
 export interface RouteContext {
   registry: BotRegistry;
@@ -29,8 +28,6 @@ export interface RouteContext {
   peerManager?: PeerManager;
   memoryServerUrl?: string;
   memoryAuthToken?: string;
-  pushService?: PushService;
-  deviceStore?: DeviceStore;
   asyncTaskStore: AsyncTaskStore;
   intentRouter: IntentRouter;
   circuitBreaker: CircuitBreaker;
@@ -41,6 +38,7 @@ export interface RouteContext {
   rtcService?: RtcVoiceChatService;
   ws: { handle?: WebSocketHandle };
   sessionRegistry?: SessionRegistry;
+  activityStore?: ActivityStore;
 }
 
 /**

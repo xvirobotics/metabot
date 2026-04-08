@@ -19,8 +19,6 @@ import { startMemoryServer } from './memory/memory-server.js';
 import { DocSync } from './sync/doc-sync.js';
 import { MemoryClient } from './memory/memory-client.js';
 
-import { DeviceStore } from './api/device-store.js';
-import { PushService } from './api/push-service.js';
 import { SessionRegistry } from './session/session-registry.js';
 
 interface FeishuBotHandle {
@@ -251,22 +249,6 @@ async function main() {
     logger.info('Wiki sync service initialized (auto-sync enabled, /sync for manual trigger)');
   }
 
-  // Initialize APNs push notification service
-  let pushService: PushService | undefined;
-  let deviceStore: DeviceStore | undefined;
-  if (process.env.APNS_KEY_PATH && process.env.APNS_KEY_ID && process.env.APNS_TEAM_ID) {
-    const dataDir = appConfig.memory.databaseDir || './data';
-    deviceStore = new DeviceStore(dataDir, logger);
-    pushService = new PushService({
-      keyPath: process.env.APNS_KEY_PATH,
-      keyId: process.env.APNS_KEY_ID,
-      teamId: process.env.APNS_TEAM_ID,
-      bundleId: process.env.APNS_BUNDLE_ID || 'com.metabot.app',
-      production: process.env.APNS_PRODUCTION === 'true',
-    }, deviceStore, logger);
-    logger.info({ keyId: process.env.APNS_KEY_ID, bundleId: process.env.APNS_BUNDLE_ID || 'com.metabot.app' }, 'APNs push notification service initialized');
-  }
-
   // Initialize cross-platform session registry
   const sessionRegistry = new SessionRegistry(logger);
   // Inject into all bot bridges
@@ -293,8 +275,6 @@ async function main() {
     peerManager,
     memoryServerUrl: appConfig.memoryServerUrl,
     memoryAuthToken: appConfig.memory.adminToken || appConfig.memory.readerToken || appConfig.memory.secret || undefined,
-    pushService,
-    deviceStore,
     sessionRegistry,
   });
 
@@ -306,9 +286,6 @@ async function main() {
       peerManager.destroy();
     }
     apiServer.close();
-    if (pushService) {
-      pushService.destroy();
-    }
     if (docSync) {
       docSync.destroy();
     }

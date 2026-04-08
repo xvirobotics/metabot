@@ -1,6 +1,4 @@
 import type * as http from 'node:http';
-import type * as lark from '@larksuiteoapi/node-sdk';
-import { FeishuDocReader } from '../../feishu/doc-reader.js';
 import { jsonResponse, parseJsonBody, readBody } from './helpers.js';
 import type { RouteContext } from './types.js';
 
@@ -90,54 +88,9 @@ export async function handleSyncRoutes(
     return true;
   }
 
-  // GET /api/feishu/document — read a Feishu document
+  // GET /api/feishu/document — deprecated, use lark-cli (lark-doc skill)
   if (method === 'GET' && url.startsWith('/api/feishu/document')) {
-    const queryStr = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
-    const params = new URLSearchParams(queryStr);
-    const docUrl = params.get('url');
-    const docId = params.get('docId');
-    const botName = params.get('botName');
-
-    if (!docUrl && !docId) {
-      jsonResponse(res, 400, { error: 'Provide either url or docId query parameter' });
-      return true;
-    }
-
-    let clientForDoc: lark.Client | undefined;
-    if (botName) {
-      const bot = registry.getByPlatform(botName, 'feishu');
-      clientForDoc = bot?.feishuClient;
-      if (!clientForDoc) {
-        jsonResponse(res, 404, { error: `Feishu bot not found: ${botName}` });
-        return true;
-      }
-    } else {
-      clientForDoc = feishuServiceClient;
-      if (!clientForDoc) {
-        const feishuBots = registry.listByPlatform('feishu');
-        clientForDoc = feishuBots[0]?.feishuClient;
-      }
-    }
-    if (!clientForDoc) {
-      jsonResponse(res, 400, { error: 'No Feishu service app or bots configured' });
-      return true;
-    }
-
-    const reader = new FeishuDocReader(clientForDoc, logger);
-    let result;
-
-    if (docUrl) {
-      result = await reader.readByUrl(docUrl);
-    } else if (docId) {
-      result = await reader.readDocument(docId);
-    }
-
-    if (!result) {
-      jsonResponse(res, 404, { error: 'Document not found or unreadable' });
-      return true;
-    }
-
-    jsonResponse(res, 200, result);
+    jsonResponse(res, 501, { error: 'Use lark-cli (lark-doc skill) to read Feishu documents.' });
     return true;
   }
 

@@ -113,6 +113,37 @@ export function removeBot(configPath: string, name: string): boolean {
   return false;
 }
 
+export function updateBot(configPath: string, name: string, updates: Record<string, unknown>): boolean {
+  const config = readBotsConfig(configPath);
+
+  // Search each platform array and update the matching entry
+  const platforms = [
+    config.feishuBots,
+    config.telegramBots,
+    config.webBots,
+    config.wechatBots,
+  ];
+  for (const bots of platforms) {
+    if (!bots) continue;
+    const idx = bots.findIndex((b: any) => b.name === name);
+    if (idx !== -1) {
+      // Merge updates into existing entry (name and platform credentials are immutable)
+      const entry = bots[idx] as unknown as Record<string, unknown>;
+      for (const [key, value] of Object.entries(updates)) {
+        if (key === 'name' || key === 'platform') continue; // immutable
+        if (value === undefined || value === null || value === '') {
+          delete entry[key];
+        } else {
+          entry[key] = value;
+        }
+      }
+      writeBotsConfig(configPath, config);
+      return true;
+    }
+  }
+  return false;
+}
+
 export function getBotEntry(
   configPath: string,
   name: string,

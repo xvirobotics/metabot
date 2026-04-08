@@ -59,7 +59,6 @@ Feishu/TG/WeChat → IM Bridge → Claude Code Agent SDK → Streaming card upda
 | **Feishu/Lark** | Work, team collaboration | Streaming interactive cards, @mention routing, Wiki auto-sync |
 | **Telegram** | Personal / international | 30-second setup, long polling (no public IP), group + private chat |
 | **Web UI** | Browser, voice conversations | Phone call mode (VAD), RTC calls, MetaMemory browser, team dashboard |
-| **iOS App** | Native iPhone/iPad | CallKit, VoIP push, speech recognition, iPad split view |
 
 ## Web UI
 
@@ -70,6 +69,8 @@ Feishu/TG/WeChat → IM Bridge → Claude Code Agent SDK → Streaming card upda
 | **Agent Organization** | MetaSkill + Scheduler + Agent Bus | One command generates a full agent team. Agents delegate tasks and create new agents |
 
 Full-featured browser-based chat interface. Access at `https://your-server/web/` after starting MetaBot.
+
+![MetaBot Web UI](resources/web-ui.png)
 
 - **Real-time streaming** -- WebSocket, Markdown rendering, tool call display
 - **Phone call mode** -- Tap phone icon for fullscreen hands-free voice conversation with VAD
@@ -84,32 +85,12 @@ Full-featured browser-based chat interface. Access at `https://your-server/web/`
 
 > Voice features require HTTPS. We recommend Caddy as a reverse proxy. See [Web UI docs](https://xvirobotics.com/metabot/features/web-ui/).
 
-## iOS App
-
-Native Swift app providing a complete mobile agent interaction experience.
-
-- **Native call experience** -- CallKit integration, call history in Phone app
-- **VoIP push notifications** -- Get notified when agents complete tasks, even in background
-- **Voice input** -- Apple SFSpeechRecognizer real-time transcription
-- **Phone call mode** -- Fullscreen voice conversation with VAD
-- **RTC calls** -- Real-time voice/video via VolcEngine RTC
-- **MetaMemory browser** -- Search and browse knowledge base with folder navigation
-- **Group chat** -- Multi-agent conversations with @mention routing
-- **Team dashboard** -- View all agent statuses
-- **iPad split view** -- Three-column layout for tablets
-- **Markdown rendering** -- Rich text via swift-markdown-ui
-- **Keychain auth** -- Secure token storage
-
-**Requirements**: iOS 17.0+, Xcode 15+, Apple Developer Account
-
-> iOS setup is more involved (developer account, push certificates, etc.). See [iOS App docs](https://xvirobotics.com/metabot/features/ios-app/).
-
 ## Core Components
 
 | Component | Description |
 |-----------|-------------|
 | **Claude Code Kernel** | Every bot is a full Claude Code instance — Read/Write/Edit/Bash/Glob/Grep/WebSearch/MCP, `bypassPermissions` for autonomous operation |
-| **MetaSkill** | Agent factory. `/metaskill ios app` generates a complete `.claude/` agent team (orchestrator + specialists + reviewer) |
+| **MetaSkill** | Agent factory. `/metaskill` generates a complete `.claude/` agent team (orchestrator + specialists + reviewer) |
 | **MetaMemory** | Embedded SQLite knowledge store with full-text search, Web UI, auto-syncs to Feishu Wiki |
 | **IM Bridge** | Chat with any agent from Feishu, Telegram, or WeChat (including mobile). Streaming cards + tool call tracking |
 | **Agent Bus** | Agents talk to each other via `mb talk`. Create/remove bots at runtime |
@@ -141,8 +122,6 @@ Native Swift app providing a complete mobile agent interaction experience.
 > No public IP needed. Feishu uses WebSocket, Telegram and WeChat use long polling.
 
 **Web UI**: Visit `http://localhost:9100/web/` after starting MetaBot, enter your API_SECRET.
-
-**iOS App**: Build with Xcode and install on your device. See [iOS App docs](https://xvirobotics.com/metabot/features/ios-app/).
 
 ## Example Prompts
 
@@ -276,7 +255,7 @@ Supported: text, images (Claude multimodal), files (PDF/code/docs), rich text (P
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `API_PORT` | 9100 | HTTP API port |
-| `API_SECRET` | — | Bearer token auth (protects API + Web UI) |
+| `API_SECRET` | — | Bearer token auth (protects API + Web UI). Generate one with `openssl rand -hex 32` |
 | `MEMORY_ENABLED` | true | Enable MetaMemory |
 | `MEMORY_PORT` | 8100 | MetaMemory port |
 | `MEMORY_ADMIN_TOKEN` | — | Admin token (full access) |
@@ -286,9 +265,9 @@ Supported: text, images (Claude multimodal), files (PDF/code/docs), rich text (P
 | `WIKI_AUTO_SYNC` | true | Auto-sync on changes |
 | `VOLCENGINE_TTS_APPID` | — | Doubao voice (TTS + STT) |
 | `VOLCENGINE_TTS_ACCESS_KEY` | — | Doubao voice key |
-| `METABOT_URL` | `http://localhost:9100` | MetaBot API URL |
-| `META_MEMORY_URL` | `http://localhost:8100` | MetaMemory server URL |
-| `METABOT_PEERS` | — | Peer MetaBot URLs (comma-separated) |
+| `METABOT_URL` | `http://localhost:9100` | MetaBot API URL. Default is local HTTP; for remote access prefer HTTPS or a private-network address |
+| `META_MEMORY_URL` | `http://localhost:8100` | MetaMemory server URL. Default is local HTTP; for remote access prefer HTTPS or a private-network address |
+| `METABOT_PEERS` | — | Peer MetaBot URLs (comma-separated). Prefer HTTPS for internet-reachable peers |
 | `LOG_LEVEL` | info | Log level |
 
 </details>

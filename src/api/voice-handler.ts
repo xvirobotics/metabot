@@ -24,6 +24,39 @@ import type { BotRegistry } from './bot-registry.js';
 const MAX_AUDIO_SIZE = 100 * 1024 * 1024; // 100 MB (Doubao flash limit)
 
 // ---------------------------------------------------------------------------
+// Per-chat voice conversation history (for Seed-ASR context)
+// ---------------------------------------------------------------------------
+
+interface VoiceTurn { role: 'user' | 'assistant'; text: string; ts: number }
+
+const voiceHistory = new Map<string, VoiceTurn[]>();
+const HISTORY_MAX_TURNS = 10;
+const HISTORY_TTL_MS = 30 * 60 * 1000; // 30 min
+
+function pushVoiceHistory(chatId: string, role: 'user' | 'assistant', text: string): void {
+  if (!text.trim()) return;
+  let turns = voiceHistory.get(chatId);
+  if (!turns) { turns = []; voiceHistory.set(chatId, turns); }
+  turns.push({ role, text: text.slice(0, 500), ts: Date.now() });
+  // Keep only the most recent turns
+  if (turns.length > HISTORY_MAX_TURNS) turns.splice(0, turns.length - HISTORY_MAX_TURNS);
+}
+
+function getVoiceContext(chatId: string): string[] {
+  const turns = voiceHistory.get(chatId);
+  if (!turns) return [];
+  const now = Date.now();
+  // Filter out expired turns
+  const valid = turns.filter(t => now - t.ts < HISTORY_TTL_MS);
+  if (valid.length !== turns.length) voiceHistory.set(chatId, valid);
+  return valid.map(t => t.text);
+}
+
+export function clearVoiceHistory(chatId: string): void {
+  voiceHistory.delete(chatId);
+}
+
+// ---------------------------------------------------------------------------
 // Read raw audio body
 // ---------------------------------------------------------------------------
 
@@ -76,7 +109,14 @@ function extToFormat(ext: string): string {
 // Doubao (Volcengine) STT — Flash Recognition (synchronous)
 // ---------------------------------------------------------------------------
 
-export async function doubaoTranscribe(audioBuffer: Buffer, ext: string, logger: Logger): Promise<string> {
+export interface SttContext {
+  /** Recent dialog turns for context-aware recognition */
+  dialogHistory?: string[];
+  /** Hotwords to boost recognition (names, terms, etc.) */
+  hotwords?: string[];
+}
+
+export async function doubaoTranscribe(audioBuffer: Buffer, ext: string, logger: Logger, context?: SttContext): Promise<string> {
   const appKey = process.env.VOLCENGINE_TTS_APPID;
   const accessKey = process.env.VOLCENGINE_TTS_ACCESS_KEY;
   if (!appKey || !accessKey) {
@@ -85,6 +125,24 @@ export async function doubaoTranscribe(audioBuffer: Buffer, ext: string, logger:
 
   const requestId = crypto.randomUUID();
   const url = 'https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash';
+
+  // Build corpus with context for Seed-ASR
+  const corpus: Record<string, unknown> = {};
+  const hasDialog = context?.dialogHistory && context.dialogHistory.length > 0;
+  const hasHotwords = context?.hotwords && context.hotwords.length > 0;
+
+  if (hasDialog || hasHotwords) {
+    const ctxObj: Record<string, unknown> = {};
+    if (hasDialog) {
+      ctxObj.context_type = 'dialog_ctx';
+      ctxObj.context_data = context!.dialogHistory!.map(text => ({ text }));
+    }
+    if (hasHotwords) {
+      ctxObj.hotwords = context!.hotwords!.map(word => ({ word }));
+    }
+    corpus.context = ctxObj;
+  }
+
   const response = await proxyFetch(url, {
     method: 'POST',
     headers: {
@@ -101,7 +159,10 @@ export async function doubaoTranscribe(audioBuffer: Buffer, ext: string, logger:
         data: audioBuffer.toString('base64'),
         format: extToFormat(ext),
       },
-      request: { model_name: 'bigmodel' },
+      request: {
+        model_name: 'bigmodel',
+        ...(Object.keys(corpus).length > 0 ? { corpus } : {}),
+      },
     }),
   });
 
@@ -112,7 +173,7 @@ export async function doubaoTranscribe(audioBuffer: Buffer, ext: string, logger:
 
   const result = await response.json() as any;
   const text = result?.result?.text || '';
-  logger.info({ textLength: text.length, requestId }, 'Doubao STT transcription complete');
+  logger.info({ textLength: text.length, requestId, hasContext: hasDialog || hasHotwords }, 'Doubao STT transcription complete');
   return text;
 }
 
@@ -372,12 +433,26 @@ export async function handleVoiceRequest(
   const ext = detectAudioExt(req.headers['content-type'], audioBuffer);
   logger.info({ botName: botName || '(sttOnly)', chatId, audioSize: audioBuffer.length, ext, sttProvider, sttOnly }, 'Voice request received');
 
+  // Build Seed-ASR context from recent voice conversation history + hotwords
+  const sttContext: SttContext = {};
+  const dialogHistory = getVoiceContext(chatId);
+  if (dialogHistory.length > 0) {
+    sttContext.dialogHistory = dialogHistory;
+  }
+  // Collect hotwords: bot name, custom hotwords from env
+  const hotwords: string[] = [];
+  if (botName) hotwords.push(botName);
+  if (bot?.config.name && bot.config.name !== botName) hotwords.push(bot.config.name);
+  const envHotwords = process.env.VOICE_HOTWORDS;
+  if (envHotwords) hotwords.push(...envHotwords.split(',').map(w => w.trim()).filter(Boolean));
+  if (hotwords.length > 0) sttContext.hotwords = hotwords;
+
   // Step 1: STT
   let transcript: string;
   if (sttProvider === 'whisper') {
     transcript = await whisperTranscribe(audioBuffer, ext, language, logger);
   } else {
-    transcript = await doubaoTranscribe(audioBuffer, ext, logger);
+    transcript = await doubaoTranscribe(audioBuffer, ext, logger, sttContext);
   }
 
   if (!transcript.trim()) {
@@ -391,7 +466,10 @@ export async function handleVoiceRequest(
     jsonResponse(res, 200, { success: true, transcript });
     return;
   }
-  logger.info({ botName, chatId, transcript, sttProvider }, 'Voice transcript');
+  logger.info({ botName, chatId, transcript, sttProvider, contextTurns: dialogHistory.length }, 'Voice transcript');
+
+  // Record user turn in voice history
+  pushVoiceHistory(chatId, 'user', transcript);
 
   const voiceMode = params.get('voiceMode') === 'true';
   const orchestratorMode = params.get('orchestrator') === 'true' || process.env.VOICE_ORCHESTRATOR === 'true';
@@ -422,6 +500,9 @@ export async function handleVoiceRequest(
   const responseText = talkResult.responseText || '';
   const costUsd = talkResult.costUsd || 0;
   logger.info({ botName, chatId, voiceMode, responseLength: responseText.length, costUsd }, 'Voice response ready');
+
+  // Record assistant turn in voice history
+  pushVoiceHistory(chatId, 'assistant', responseText);
 
   // Step 3: Optional TTS
   if (ttsProvider && responseText) {

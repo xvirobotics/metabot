@@ -6,8 +6,6 @@ import type { TaskScheduler } from '../scheduler/task-scheduler.js';
 import type { DocSync } from '../sync/doc-sync.js';
 import type { PeerManager } from './peer-manager.js';
 
-import type { PushService } from './push-service.js';
-import type { DeviceStore } from './device-store.js';
 import { AsyncTaskStore } from './async-task-store.js';
 import { setupWebSocketServer, serveStaticFiles, type WebSocketHandle } from '../web/ws-server.js';
 import { IntentRouter } from './intent-router.js';
@@ -17,6 +15,7 @@ import { TeamManager } from './team-manager.js';
 import { VoiceMeetingService } from './voice-meeting.js';
 import { VoiceIdentityStore } from './voice-identity.js';
 import { RtcVoiceChatService } from './rtc-voice-chat.js';
+import { ActivityStore } from './activity-store.js';
 import { metrics as _metrics } from '../utils/metrics.js';
 import type { SessionRegistry } from '../session/session-registry.js';
 import {
@@ -44,8 +43,6 @@ interface ApiServerOptions {
   peerManager?: PeerManager;
   memoryServerUrl?: string;
   memoryAuthToken?: string;
-  pushService?: PushService;
-  deviceStore?: DeviceStore;
   circuitBreaker?: CircuitBreaker;
   budgetManager?: BudgetManager;
   teamManager?: TeamManager;
@@ -57,7 +54,7 @@ const startTime = Date.now();
 (globalThis as any).__metabot_start_time = startTime;
 
 export function startApiServer(options: ApiServerOptions): http.Server {
-  const { port, secret, registry, scheduler, logger, botsConfigPath, docSync, feishuServiceClient, peerManager, memoryServerUrl, memoryAuthToken, pushService, deviceStore } = options;
+  const { port, secret, registry, scheduler, logger, botsConfigPath, docSync, feishuServiceClient, peerManager, memoryServerUrl, memoryAuthToken } = options;
   const host = secret ? '0.0.0.0' : '127.0.0.1';
 
   // Initialize shared services
@@ -68,6 +65,7 @@ export function startApiServer(options: ApiServerOptions): http.Server {
   const teamManager = options.teamManager ?? new TeamManager(logger);
   const meetingService = new VoiceMeetingService(registry, logger);
   const voiceIdentityStore = new VoiceIdentityStore(logger);
+  const activityStore = new ActivityStore(logger);
   const rtcService = new RtcVoiceChatService(logger);
   if (rtcService.isConfigured()) {
     logger.info('RTC voice chat service enabled');
@@ -78,12 +76,13 @@ export function startApiServer(options: ApiServerOptions): http.Server {
   // Build route context (shared across all route handlers)
   const ctx: RouteContext = {
     registry, scheduler, logger, botsConfigPath, docSync, feishuServiceClient,
-    peerManager, memoryServerUrl, memoryAuthToken, pushService,
-    deviceStore, asyncTaskStore, intentRouter, circuitBreaker, budgetManager,
+    peerManager, memoryServerUrl, memoryAuthToken,
+    asyncTaskStore, intentRouter, circuitBreaker, budgetManager,
     teamManager, meetingService, voiceIdentityStore,
     rtcService: rtcService.isConfigured() ? rtcService : undefined,
     ws,
     sessionRegistry: options.sessionRegistry,
+    activityStore,
   };
 
   // Route handlers in priority order
@@ -149,10 +148,18 @@ export function startApiServer(options: ApiServerOptions): http.Server {
   });
 
   // Set up WebSocket server for Web UI streaming
-  ws.handle = setupWebSocketServer(server, registry, logger, secret, peerManager, pushService, options.sessionRegistry);
+  ws.handle = setupWebSocketServer(server, registry, logger, secret, peerManager, options.sessionRegistry);
 
   // Wire WebSocket handle to scheduler so scheduled tasks stream updates to clients
   scheduler.setWebSocketHandle(ws.handle);
+
+  // Wire activity events: each bridge records to ActivityStore and broadcasts to WS clients
+  for (const bot of registry.listRegistered()) {
+    bot.bridge.onActivityEvent = (event) => {
+      const recorded = activityStore.record(event);
+      ws.handle?.broadcastAll({ type: 'activity_event', event: recorded });
+    };
+  }
 
   server.listen(port, host, () => {
     logger.info({ host, port }, 'API server started');

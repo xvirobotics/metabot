@@ -63,7 +63,6 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 | **飞书/Lark** | 工作场景，团队协作 | 流式交互卡片、@mention 路由、知识库自动同步 |
 | **Telegram** | 个人/国际用户 | 30 秒配置、长轮询无需公网 IP、群聊 + 私聊 |
 | **Web UI** | 浏览器端，语音对话 | 电话语音模式（VAD）、RTC 实时通话、MetaMemory 浏览器、团队看板 |
-| **iOS App** | iPhone/iPad 原生体验 | CallKit 来电界面、VoIP 推送、语音识别、iPad 分栏视图 |
 
 | 支柱 | 组件 | 作用 |
 |------|------|------|
@@ -74,6 +73,8 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 ## Web UI
 
 浏览器端全功能聊天界面，部署即可用。访问地址：`https://your-server/web/`
+
+![MetaBot Web UI](resources/web-ui.png)
 
 - **实时流式聊天** — WebSocket 推送，Markdown 渲染，工具调用展示
 - **电话语音模式** — 点击电话图标，全屏免手对话，VAD 自动检测说完
@@ -88,32 +89,12 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 
 > 语音功能需要 HTTPS。推荐用 Caddy 反向代理，自动管理证书。详见 [Web UI 文档](https://xvirobotics.com/metabot/zh/features/web-ui/)。
 
-## iOS App
-
-原生 Swift iOS 应用，提供完整的移动端 Agent 交互体验。
-
-- **原生通话体验** — CallKit 集成，来电界面和电话 App 中显示通话记录
-- **VoIP 推送通知** — Agent 完成任务时推送到手机，即使 App 在后台
-- **语音输入** — Apple SFSpeechRecognizer 实时语音转文字
-- **电话语音模式** — 全屏语音对话，VAD 自动检测，类似打电话
-- **RTC 通话** — 基于火山引擎 RTC 的实时语音/视频
-- **MetaMemory 浏览器** — 搜索和浏览知识库，支持文件夹导航
-- **群聊** — 多 Agent 对话，@mention 路由
-- **团队看板** — 查看所有 Agent 状态
-- **iPad 分栏** — iPad 三栏布局，充分利用大屏
-- **Markdown 渲染** — swift-markdown-ui 富文本展示
-- **Keychain 认证** — Token 安全存储
-
-**要求**：iOS 17.0+，Xcode 15+，需要 Apple 开发者账户
-
-> iOS App 配置较复杂（需注册开发者账户、配置推送证书等）。详见 [iOS App 文档](https://xvirobotics.com/metabot/zh/features/ios-app/)。
-
 ## 核心能力
 
 | 组件 | 一句话说明 |
 |------|-----------|
 | **Claude Code 内核** | 每个 Bot 都是完整的 Claude Code — Read/Write/Edit/Bash/Glob/Grep/WebSearch/MCP，`bypassPermissions` 全自动 |
-| **MetaSkill** | Agent 工厂。`/metaskill ios app` 一键生成 `.claude/` Agent 团队（orchestrator + 专家 + reviewer） |
+| **MetaSkill** | Agent 工厂。`/metaskill` 一键生成 `.claude/` Agent 团队（orchestrator + 专家 + reviewer） |
 | **MetaMemory** | 内嵌 SQLite 知识库，全文搜索，Web UI，变更自动同步到飞书知识库 |
 | **IM Bridge** | 飞书、Telegram、微信（含手机端）对话任意 Agent，流式卡片 + 工具调用追踪 |
 | **Agent 总线** | Agent 通过 `mb talk` 互相对话，运行时创建/删除 Bot |
@@ -145,8 +126,6 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 > 不需要公网 IP。飞书用 WebSocket，Telegram 和微信用长轮询。
 
 **Web UI**：启动 MetaBot 后访问 `http://localhost:9100/web/`，输入 API_SECRET 即可使用。
-
-**iOS App**：需要 Xcode 编译安装。详见 [iOS App 文档](https://xvirobotics.com/metabot/zh/features/ios-app/)。
 
 ## 示例 Prompt
 

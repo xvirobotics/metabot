@@ -39,6 +39,17 @@
   font-family: var(--font-mono);
 }
 
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.sectionHeader .sectionTitle {
+  margin-bottom: 0;
+}
+
 /* Cards */
 .card {
   background: var(--surface-1);
@@ -133,6 +144,21 @@
   border-color: var(--glass-border-hover);
 }
 
+.btnAccent {
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  padding: 6px 14px;
+}
+.btnAccent:hover {
+  box-shadow: 0 0 12px rgba(0, 214, 143, 0.3);
+}
+
+.btnSmall {
+  padding: 5px 12px;
+  font-size: 11px;
+}
+
 .btnDanger {
   background: var(--red-soft);
   color: var(--red);
@@ -189,6 +215,12 @@
 .botInfo { flex: 1; min-width: 0; }
 .botName { font-size: 14px; font-weight: 500; color: var(--text-0); letter-spacing: -0.1px; }
 .botMeta { font-size: 12px; color: var(--text-2); font-family: var(--font-mono); }
+
+.botActions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
 
 /* Font size segmented control */
 .fontSizeGroup {

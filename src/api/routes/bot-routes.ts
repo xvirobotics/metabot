@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import type * as http from 'node:http';
-import { addBot, removeBot, getBotEntry } from '../bots-config-writer.js';
+import { addBot, removeBot, updateBot, getBotEntry } from '../bots-config-writer.js';
 import { installSkillsToWorkDir } from '../skills-installer.js';
 import { webBotFromJson } from '../../config.js';
 import { NullSender } from '../../web/null-sender.js';
@@ -15,7 +15,7 @@ export async function handleBotRoutes(
   method: string,
   url: string,
 ): Promise<boolean> {
-  const { registry, logger, botsConfigPath, peerManager, memoryServerUrl, memoryAuthToken, deviceStore, ws } = ctx;
+  const { registry, logger, botsConfigPath, peerManager, memoryServerUrl, memoryAuthToken, ws } = ctx;
 
   // GET /api/bots/:name/profile — detailed bot profile with stats
   if (method === 'GET' && /^\/api\/bots\/[^/]+\/profile$/.test(url)) {
@@ -34,42 +34,6 @@ export async function handleBotRoutes(
       maxConcurrentTasks: bot.config.maxConcurrentTasks, budgetLimitDaily: bot.config.budgetLimitDaily,
       stats: botStats || { totalTasks: 0, completedTasks: 0, failedTasks: 0, totalCostUsd: 0 },
     });
-    return true;
-  }
-
-  // POST /api/devices/register
-  if (method === 'POST' && url === '/api/devices/register') {
-    if (!deviceStore) {
-      jsonResponse(res, 400, { error: 'Push notifications not configured. Set APNS_KEY_PATH, APNS_KEY_ID, APNS_TEAM_ID.' });
-      return true;
-    }
-    const body = await parseJsonBody(req);
-    const deviceToken = body.deviceToken as string;
-    const chatId = body.chatId as string;
-    if (!deviceToken || !chatId) {
-      jsonResponse(res, 400, { error: 'Missing required fields: deviceToken, chatId' });
-      return true;
-    }
-    const tokenType = (body.tokenType as 'alert' | 'voip') || 'alert';
-    deviceStore.register(chatId, deviceToken, tokenType);
-    jsonResponse(res, 200, { registered: true });
-    return true;
-  }
-
-  // DELETE /api/devices/register
-  if (method === 'DELETE' && url === '/api/devices/register') {
-    if (!deviceStore) {
-      jsonResponse(res, 400, { error: 'Push notifications not configured.' });
-      return true;
-    }
-    const body = await parseJsonBody(req);
-    const deviceToken = body.deviceToken as string;
-    if (!deviceToken) {
-      jsonResponse(res, 400, { error: 'Missing required field: deviceToken' });
-      return true;
-    }
-    deviceStore.unregister(deviceToken);
-    jsonResponse(res, 200, { unregistered: true });
     return true;
   }
 
@@ -185,6 +149,29 @@ export async function handleBotRoutes(
         throw err;
       }
     }
+    return true;
+  }
+
+  // PUT /api/bots/:name — update an existing bot
+  if (method === 'PUT' && url.startsWith('/api/bots/')) {
+    const name = decodeURIComponent(url.slice('/api/bots/'.length));
+    if (!name) {
+      jsonResponse(res, 400, { error: 'Missing bot name' });
+      return true;
+    }
+    if (!botsConfigPath) {
+      jsonResponse(res, 400, { error: 'Bot CRUD requires BOTS_CONFIG to be set' });
+      return true;
+    }
+    const body = await parseJsonBody(req);
+    const updated = updateBot(botsConfigPath, name, body);
+    if (!updated) {
+      jsonResponse(res, 404, { error: `Bot not found: ${name}` });
+      return true;
+    }
+    logger.info({ name, updates: Object.keys(body) }, 'Bot config updated');
+    ws.handle?.broadcastBotList();
+    jsonResponse(res, 200, { name, updated: true });
     return true;
   }
 
