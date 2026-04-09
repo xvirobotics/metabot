@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MetaBot Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/Liyunlun/metabot/main/install.sh | bash
 set -euo pipefail
 
 # ============================================================================
@@ -17,7 +17,7 @@ fi
 # Configuration defaults
 # ============================================================================
 METABOT_HOME="${METABOT_HOME:-$HOME/metabot}"
-METABOT_REPO="${METABOT_REPO:-https://github.com/xvirobotics/metabot.git}"
+METABOT_REPO="${METABOT_REPO:-https://github.com/Liyunlun/metabot.git}"
 
 # ============================================================================
 # Colors and formatting

@@ -17,6 +17,8 @@ export interface BotConfigBase {
     maxTurns: number | undefined;
     maxBudgetUsd: number | undefined;
     model: string | undefined;
+    thinking: Record<string, unknown> | undefined;
+    effort: 'low' | 'medium' | 'high' | 'max' | undefined;
     /** Explicit Anthropic API key. When set, child Claude Code processes use this
      *  key instead of ~/.claude/.credentials.json. Supports cc-switch compatibility:
      *  leave unset to let Claude Code resolve auth dynamically. */
@@ -117,6 +119,8 @@ export interface FeishuBotJsonEntry {
   maxTurns?: number;
   maxBudgetUsd?: number;
   model?: string;
+  thinking?: Record<string, unknown>;
+  effort?: 'low' | 'medium' | 'high' | 'max';
   apiKey?: string;
   outputsBaseDir?: string;
   downloadsDir?: string;
@@ -154,6 +158,8 @@ export interface TelegramBotJsonEntry {
   maxTurns?: number;
   maxBudgetUsd?: number;
   model?: string;
+  thinking?: Record<string, unknown>;
+  effort?: 'low' | 'medium' | 'high' | 'max';
   apiKey?: string;
   outputsBaseDir?: string;
   downloadsDir?: string;
@@ -241,6 +247,8 @@ function buildClaudeConfig(entry: {
   maxTurns?: number;
   maxBudgetUsd?: number;
   model?: string;
+  thinking?: Record<string, unknown>;
+  effort?: 'low' | 'medium' | 'high' | 'max';
   apiKey?: string;
   outputsBaseDir?: string;
   downloadsDir?: string;
@@ -250,6 +258,8 @@ function buildClaudeConfig(entry: {
     maxTurns: entry.maxTurns ?? (process.env.CLAUDE_MAX_TURNS ? parseInt(process.env.CLAUDE_MAX_TURNS, 10) : undefined),
     maxBudgetUsd: entry.maxBudgetUsd ?? (process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined),
     model: entry.model || process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || 'claude-opus-4-6',
+    thinking: entry.thinking ?? { type: 'adaptive' },
+    effort: entry.effort ?? 'max',
     apiKey: entry.apiKey || undefined,
     outputsBaseDir: entry.outputsBaseDir || process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), `metabot-outputs-${os.userInfo().username}`),
     downloadsDir: entry.downloadsDir || process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), `metabot-downloads-${os.userInfo().username}`),
@@ -270,6 +280,8 @@ function feishuBotFromEnv(): BotConfig {
       maxTurns: process.env.CLAUDE_MAX_TURNS ? parseInt(process.env.CLAUDE_MAX_TURNS, 10) : undefined,
       maxBudgetUsd: process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined,
       model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
+      thinking: { type: 'adaptive' },
+      effort: 'max',
       apiKey: undefined,
       outputsBaseDir: process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), `metabot-outputs-${os.userInfo().username}`),
       downloadsDir: process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), `metabot-downloads-${os.userInfo().username}`),
@@ -288,6 +300,8 @@ function telegramBotFromEnv(): TelegramBotConfig {
       maxTurns: process.env.CLAUDE_MAX_TURNS ? parseInt(process.env.CLAUDE_MAX_TURNS, 10) : undefined,
       maxBudgetUsd: process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined,
       model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
+      thinking: { type: 'adaptive' },
+      effort: 'max',
       apiKey: undefined,
       outputsBaseDir: process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), `metabot-outputs-${os.userInfo().username}`),
       downloadsDir: process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), `metabot-downloads-${os.userInfo().username}`),
@@ -306,6 +320,8 @@ function wechatBotFromEnv(): WechatBotConfig {
       maxTurns: process.env.CLAUDE_MAX_TURNS ? parseInt(process.env.CLAUDE_MAX_TURNS, 10) : undefined,
       maxBudgetUsd: process.env.CLAUDE_MAX_BUDGET_USD ? parseFloat(process.env.CLAUDE_MAX_BUDGET_USD) : undefined,
       model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
+      thinking: { type: 'adaptive' },
+      effort: 'max',
       apiKey: undefined,
       outputsBaseDir: expandUserPath(process.env.OUTPUTS_BASE_DIR || path.join(os.tmpdir(), `metabot-outputs-${os.userInfo().username}`)),
       downloadsDir: expandUserPath(process.env.DOWNLOADS_DIR || path.join(os.tmpdir(), `metabot-downloads-${os.userInfo().username}`)),

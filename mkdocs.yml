@@ -1,8 +1,8 @@
 site_name: MetaBot
 site_url: https://xvirobotics.com/metabot
 site_description: 构建受监督的、自我进化的 Agent 组织的基础设施
-repo_url: https://github.com/xvirobotics/metabot
-repo_name: xvirobotics/metabot
+repo_url: https://github.com/Liyunlun/metabot
+repo_name: Liyunlun/metabot
 edit_uri: edit/main/docs/
 
 theme:
@@ -50,7 +50,6 @@ markdown_extensions:
 plugins:
   - search
   - i18n:
-      default_language: zh
       languages:
         - locale: zh
           default: true
@@ -102,7 +101,7 @@ plugins:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/xvirobotics/metabot
+      link: https://github.com/Liyunlun/metabot
   alternate:
     - name: 中文
       link: /metabot/

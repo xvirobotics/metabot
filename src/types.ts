@@ -6,6 +6,8 @@ export interface ToolCall {
   name: string;
   detail: string;
   status: 'running' | 'done';
+  input?: string;
+  output?: string;
 }
 
 export interface PendingQuestion {
@@ -18,17 +20,37 @@ export interface PendingQuestion {
   }>;
 }
 
+export interface SubagentTask {
+  taskId: string;
+  description: string;
+  status: 'running' | 'completed' | 'failed' | 'stopped';
+  summary?: string;
+  usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+  thinkingText?: string;
+  toolCalls?: ToolCall[];
+}
+
 export interface CardState {
   status: CardStatus;
   userPrompt: string;
   responseText: string;
+  thinkingText?: string;
   toolCalls: ToolCall[];
+  toolSummaries?: string[];
+  subagentTasks?: SubagentTask[];
+  startTime?: number;
   costUsd?: number;
   durationMs?: number;
   errorMessage?: string;
+  retryInfo?: string;
   pendingQuestion?: PendingQuestion;
   /** Primary model used (e.g. "claude-opus-4-6") */
   model?: string;
+  thinking?: string;
+  effort?: string;
+  sessionId?: string;
+  workingDirectory?: string;
+  numTurns?: number;
   /** Total input+output tokens consumed */
   totalTokens?: number;
   /** Context window size of the primary model */

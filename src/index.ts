@@ -28,6 +28,9 @@ interface FeishuBotHandle {
   config: BotConfigBase;
   sender: IMessageSender;
   feishuClient: lark.Client;
+  dispatcher: lark.EventDispatcher;
+  botConfig: BotConfig;
+  lastWsActivity: number;
 }
 
 async function startFeishuBot(botConfig: BotConfig, logger: Logger, memoryServerUrl: string, memorySecret?: string): Promise<FeishuBotHandle> {
@@ -61,8 +64,12 @@ async function startFeishuBot(botConfig: BotConfig, logger: Logger, memoryServer
   const sender = new FeishuSenderAdapter(rawSender);
   const bridge = new MessageBridge(botConfig, botLogger, sender, memoryServerUrl, memorySecret);
 
+  // Track last WS activity for heartbeat detection
+  const handle: Partial<FeishuBotHandle> = { lastWsActivity: Date.now() };
+
   // Create event dispatcher wired to the bridge
   const dispatcher = createEventDispatcher(botConfig, botLogger, (msg) => {
+    handle.lastWsActivity = Date.now();
     bridge.handleMessage(msg).catch((err) => {
       botLogger.error({ err, msg }, 'Unhandled error in message bridge');
     });
@@ -85,7 +92,8 @@ async function startFeishuBot(botConfig: BotConfig, logger: Logger, memoryServer
     maxBudgetUsd: botConfig.claude.maxBudgetUsd ?? 'unlimited',
   }, 'Configuration');
 
-  return { name: botConfig.name, bridge, wsClient, config: botConfig, sender, feishuClient: client };
+  Object.assign(handle, { name: botConfig.name, bridge, wsClient, config: botConfig, sender, feishuClient: client, dispatcher, botConfig });
+  return handle as FeishuBotHandle;
 }
 
 async function main() {
@@ -181,6 +189,51 @@ async function main() {
     ...wechatHandles.map((h) => h.name),
   ];
   logger.info({ bots: allNames }, 'All bots started');
+
+  // WebSocket heartbeat: detect silent disconnects via active API probe.
+  // Only reconnect when API is healthy but WS has been idle too long,
+  // indicating a silent WS disconnect (not just quiet hours with no messages).
+  const WS_CHECK_INTERVAL_MS = 60_000;    // Probe every 60 seconds
+  const WS_IDLE_THRESHOLD_MS = 5 * 60_000; // Reconnect after 5 min idle
+  const wsReconnecting = new Set<string>();
+
+  const wsHeartbeatInterval = setInterval(async () => {
+    const now = Date.now();
+    for (const handle of feishuHandles) {
+      const idleMs = now - handle.lastWsActivity;
+      // Skip if recently active or already reconnecting
+      if (idleMs <= WS_IDLE_THRESHOLD_MS || wsReconnecting.has(handle.name)) continue;
+
+      // Active probe: make a lightweight API call to verify Feishu connectivity
+      try {
+        await handle.feishuClient.request({ method: 'GET', url: '/open-apis/bot/v3/info' });
+      } catch {
+        // API also failing — network is down, not a WS-specific issue. Skip.
+        continue;
+      }
+
+      // API works but no WS activity for 5+ min — WS is likely dead
+      wsReconnecting.add(handle.name);
+      const idleMin = Math.round(idleMs / 60_000);
+      logger.warn({ bot: handle.name, idleMinutes: idleMin }, 'WS silent disconnect detected (API healthy, no WS activity), forcing reconnect');
+      try {
+        handle.wsClient.close();
+        const newWsClient = new lark.WSClient({
+          appId: handle.botConfig.feishu.appId,
+          appSecret: handle.botConfig.feishu.appSecret,
+          loggerLevel: lark.LoggerLevel.info,
+        });
+        await newWsClient.start({ eventDispatcher: handle.dispatcher });
+        handle.wsClient = newWsClient;
+        handle.lastWsActivity = Date.now();
+        logger.info({ bot: handle.name }, 'WS reconnected successfully');
+      } catch (err) {
+        logger.error({ bot: handle.name, err }, 'WS reconnect failed, will retry next cycle');
+      } finally {
+        wsReconnecting.delete(handle.name);
+      }
+    }
+  }, WS_CHECK_INTERVAL_MS);
 
   // Create task scheduler
   const scheduler = new TaskScheduler(registry, logger);
@@ -279,8 +332,9 @@ async function main() {
   });
 
   // Graceful shutdown
-  const shutdown = () => {
+  const shutdown = async () => {
     logger.info('Shutting down...');
+    clearInterval(wsHeartbeatInterval);
     scheduler.destroy();
     if (peerManager) {
       peerManager.destroy();
@@ -294,17 +348,22 @@ async function main() {
       memoryServer.server.close();
       memoryServer.storage.close();
     }
+    const destroyPromises: Promise<void>[] = [];
     for (const handle of feishuHandles) {
-      handle.bridge.destroy();
+      destroyPromises.push(handle.bridge.destroy());
     }
     for (const handle of telegramHandles) {
-      handle.bridge.destroy();
+      destroyPromises.push(handle.bridge.destroy());
       handle.bot.stop();
     }
     for (const handle of wechatHandles) {
-      handle.bridge.destroy();
+      destroyPromises.push(handle.bridge.destroy());
       handle.stop();
     }
+    await Promise.race([
+      Promise.all(destroyPromises),
+      new Promise<void>((r) => setTimeout(r, 5000)),
+    ]);
     process.exit(0);
   };
 

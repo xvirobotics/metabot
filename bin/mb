@@ -263,6 +263,7 @@ print(json.dumps(body))
     ;;
   # --- Update from GitHub ---
   update|up)
+    BRANCH="${2:-main}"
     METABOT_SRC="${METABOT_HOME:-$HOME/metabot}"
     LOCAL_BIN="$HOME/.local/bin"
     if [[ ! -d "$METABOT_SRC/.git" ]]; then
@@ -270,8 +271,10 @@ print(json.dumps(body))
       exit 1
     fi
 
-    echo "==> Pulling latest from GitHub..."
-    git -C "$METABOT_SRC" pull --ff-only || { echo "Error: git pull failed (try resolving conflicts manually)"; exit 1; }
+    echo "==> Pulling latest from origin/$BRANCH..."
+    git -C "$METABOT_SRC" fetch origin "$BRANCH" || { echo "Error: git fetch failed"; exit 1; }
+    git -C "$METABOT_SRC" checkout "$BRANCH" || { echo "Error: git checkout $BRANCH failed"; exit 1; }
+    git -C "$METABOT_SRC" pull --ff-only origin "$BRANCH" || { echo "Error: git pull failed (try resolving conflicts manually)"; exit 1; }
 
     echo "==> Installing dependencies..."
     (cd "$METABOT_SRC" && npm install --include=dev --no-audit --no-fund 2>&1 | tail -1)
@@ -493,6 +496,6 @@ print(json.dumps(body))
     echo ""
     echo "  System:"
     echo "    mb health                        - Health check"
-    echo "    mb update                        - Pull latest & rebuild from GitHub"
+    echo "    mb update [branch]               - Pull latest & rebuild from GitHub (default: main)"
     ;;
 esac

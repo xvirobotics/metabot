@@ -129,9 +129,12 @@ export type SDKMessage = {
     content?: Array<{
       type: string;
       text?: string;
+      thinking?: string;
       name?: string;
       id?: string;
       input?: unknown;
+      content?: string | unknown;
+      tool_use_id?: string;
     }>;
   };
   // Result fields
@@ -151,6 +154,7 @@ export type SDKMessage = {
     delta?: {
       type: string;
       text?: string;
+      thinking?: string;
     };
     content_block?: {
       type: string;
@@ -160,11 +164,35 @@ export type SDKMessage = {
     };
   };
   parent_tool_use_id?: string | null;
+  // tool_use_summary fields
+  summary?: string;
+  preceding_tool_use_ids?: string[];
+  // tool_progress fields
+  tool_use_id?: string;
+  tool_name?: string;
+  elapsed_time_seconds?: number;
+  // task fields (task_started, task_progress, task_notification)
+  task_id?: string;
+  description?: string;
+  status?: string;
+  output_file?: string;
+  last_tool_name?: string;
+  task_type?: string;
+  prompt?: string;
+  usage?: {
+    total_tokens: number;
+    tool_uses: number;
+    duration_ms: number;
+  };
+  // local_command_output
+  content?: string;
 };
 
 export interface ExecutionHandle {
   stream: AsyncGenerator<SDKMessage>;
   sendAnswer(toolUseId: string, sessionId: string, answerText: string): void;
+  /** Resolve a pending AskUserQuestion hook with the user's answers. */
+  resolveQuestion(toolUseId: string, answers: Record<string, string>): void;
   finish(): void;
 }
 
@@ -183,6 +211,8 @@ export class ClaudeExecutor {
       includePartialMessages: true,
       // Load MCP servers and settings from user/project config files
       settingSources: ['user', 'project'],
+      // Auto-approve all MCP servers from .mcp.json (SDK mode has no interactive approval)
+      enableAllProjectMcpServers: true,
       // Cross-platform spawn: custom spawn filters CLAUDE* env vars and uses
       // process.execPath to avoid PATH issues on Windows; fileURLToPath converts
       // file:// URLs to native paths for the SDK CLI entrypoint.
@@ -242,6 +272,15 @@ export class ClaudeExecutor {
       queryOptions.model = this.config.claude.model;
     }
 
+    // Enable adaptive thinking with max effort for strongest reasoning
+    if (this.config.claude.thinking) {
+      queryOptions.thinking = this.config.claude.thinking;
+    }
+
+    if (this.config.claude.effort) {
+      queryOptions.effort = this.config.claude.effort;
+    }
+
     if (sessionId) {
       queryOptions.resume = sessionId;
     }
@@ -281,6 +320,54 @@ export class ClaudeExecutor {
     if (options.allowedTools !== undefined) {
       queryOptions.allowedTools = options.allowedTools;
     }
+
+    // AskUserQuestion hook: intercept the SDK's internal permission check
+    // which denies AskUserQuestion in bypassPermissions mode. The hook pauses
+    // until the bridge collects user answers, then returns them as updatedInput.
+    const pendingQuestionResolvers = new Map<string, (answers: Record<string, string>) => void>();
+
+    const askUserQuestionHook = async (
+      input: { hook_event_name: string; tool_name: string; tool_input: unknown; tool_use_id: string },
+      _toolUseId: string | undefined,
+      { signal }: { signal: AbortSignal },
+    ): Promise<Record<string, unknown>> => {
+      const toolInput = input.tool_input as Record<string, unknown>;
+
+      const answers = await new Promise<Record<string, string>>((resolve) => {
+        const id = input.tool_use_id;
+        pendingQuestionResolvers.set(id, resolve);
+
+        // Safety timeout: auto-resolve with empty answers after 6 minutes
+        // to prevent indefinite hang if bridge fails to deliver answer
+        const timeout = setTimeout(() => {
+          if (pendingQuestionResolvers.delete(id)) {
+            resolve({});
+          }
+        }, 6 * 60 * 1000);
+
+        const onAbort = () => {
+          clearTimeout(timeout);
+          pendingQuestionResolvers.delete(id);
+          resolve({});
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          updatedInput: { ...toolInput, answers },
+        },
+      };
+    };
+
+    queryOptions.hooks = {
+      PreToolUse: [{
+        matcher: 'AskUserQuestion',
+        hooks: [askUserQuestionHook as any],
+      }],
+    };
 
     const stream = query({
       prompt: inputQueue,
@@ -323,9 +410,16 @@ export class ClaudeExecutor {
       }
     }
 
+    const answeredToolUseIds = new Set<string>();
+
     return {
       stream: wrapStream(),
       sendAnswer: (toolUseId: string, sid: string, answerText: string) => {
+        if (answeredToolUseIds.has(toolUseId)) {
+          logger.warn({ toolUseId }, 'Duplicate tool_result suppressed');
+          return;
+        }
+        answeredToolUseIds.add(toolUseId);
         logger.info({ toolUseId }, 'Sending answer to Claude');
         const answerMessage: SDKUserMessage = {
           type: 'user',
@@ -343,6 +437,28 @@ export class ClaudeExecutor {
           session_id: sid,
         };
         inputQueue.enqueue(answerMessage);
+      },
+      resolveQuestion: (toolUseId: string, answers: Record<string, string>) => {
+        const resolver = pendingQuestionResolvers.get(toolUseId);
+        if (resolver) {
+          pendingQuestionResolvers.delete(toolUseId);
+          logger.info({ toolUseId, answerCount: Object.keys(answers).length }, 'Resolving AskUserQuestion hook');
+          resolver(answers);
+        } else {
+          // Fallback: send as tool_result via inputQueue (e.g. if hook was not used)
+          logger.warn({ toolUseId }, 'No pending hook resolver, falling back to sendAnswer');
+          const sid = '';
+          const answerMessage: SDKUserMessage = {
+            type: 'user',
+            message: {
+              role: 'user' as const,
+              content: [{ type: 'tool_result', tool_use_id: toolUseId, content: JSON.stringify({ answers }) }],
+            },
+            parent_tool_use_id: null,
+            session_id: sid,
+          };
+          inputQueue.enqueue(answerMessage);
+        }
       },
       finish: () => {
         inputQueue.finish();

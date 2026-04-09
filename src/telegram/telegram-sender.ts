@@ -48,6 +48,14 @@ function renderCardHtml(state: CardState): string {
     parts.push('---');
   }
 
+  // Thinking content
+  if (state.thinkingText) {
+    const truncated = state.thinkingText.length > 500
+      ? state.thinkingText.slice(0, 500) + '...'
+      : state.thinkingText;
+    parts.push(`<blockquote expandable>💭 <b>Thinking</b>\n${escapeHtml(truncated)}</blockquote>`);
+  }
+
   // Response text
   if (state.responseText) {
     parts.push(markdownToTelegramHtml(state.responseText));
@@ -59,7 +67,9 @@ function renderCardHtml(state: CardState): string {
   if (state.pendingQuestion) {
     parts.push('');
     parts.push('---');
-    for (const q of state.pendingQuestion.questions) {
+    // Only display the first question — bridge collects one answer at a time
+    const q = state.pendingQuestion.questions[0];
+    if (q) {
       parts.push(`<b>[${escapeHtml(q.header)}] ${escapeHtml(q.question)}</b>`);
       parts.push('');
       q.options.forEach((opt, i) => {
@@ -69,6 +79,11 @@ function renderCardHtml(state: CardState): string {
       parts.push('');
     }
     parts.push('<i>\u56DE\u590D\u6570\u5B57\u9009\u62E9\uFF0C\u6216\u76F4\u63A5\u8F93\u5165\u81EA\u5B9A\u4E49\u7B54\u6848</i>');
+  }
+
+  // Retry info (shown during 403 auto-retry)
+  if (state.retryInfo) {
+    parts.push(`⏳ ${escapeHtml(state.retryInfo)}`);
   }
 
   // Error message
@@ -98,7 +113,7 @@ function renderCardHtml(state: CardState): string {
     }
     if (statParts.length > 0) {
       parts.push('');
-      parts.push(`<i>${escapeHtml(statParts.join(' | '))}</i>`);
+      parts.push(`<i>${escapeHtml(statParts.join(' · '))}</i>`);
     }
   }
 

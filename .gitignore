@@ -7,6 +7,9 @@ nohup.out
 *.log
 .DS_Store
 data/
+src/skills/gpu-cluster/
+.claude/
+.worktrees/*.skill
 site/
 ios/MetaBot/.build/
 ios/MetaBot/.swiftpm/

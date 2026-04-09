@@ -28,10 +28,13 @@ describe('buildCard', () => {
     };
     const json = JSON.parse(buildCard(state));
     expect(json.header.template).toBe('blue');
-    const md = json.elements.find((e: any) => e.tag === 'markdown' && e.content.includes('Read'));
-    expect(md).toBeDefined();
-    expect(md.content).toContain('✅');
-    expect(md.content).toContain('⏳');
+    // Tool calls are inside the top-level collapsible panel body
+    const detailPanel = json.elements.find((e: any) => e.tag === 'collapsible_panel');
+    expect(detailPanel).toBeDefined();
+    const panelContent = detailPanel.elements.map((e: any) => e.content).join('\n');
+    expect(panelContent).toContain('Read');
+    expect(panelContent).toContain('✅');
+    expect(panelContent).toContain('⏳');
   });
 
   it('builds complete card with stats', () => {
@@ -48,6 +51,28 @@ describe('buildCard', () => {
     const note = json.elements.find((e: any) => e.tag === 'note');
     expect(note).toBeDefined();
     expect(note.elements[0].content).toContain('5.0s');
+  });
+
+  it('renders session info in complete stats note', () => {
+    const state: CardState = {
+      status: 'complete',
+      userPrompt: 'task',
+      responseText: 'Done!',
+      toolCalls: [],
+      durationMs: 2000,
+      costUsd: 0.01,
+      numTurns: 5,
+      workingDirectory: '/home/user/project',
+      sessionId: 'abcdef123456',
+    };
+    const json = JSON.parse(buildCard(state));
+    const note = json.elements.find((e: any) => e.tag === 'note');
+    expect(note).toBeDefined();
+    const content = note.elements[0].content;
+    expect(content).toContain('2.0s');
+    expect(content).toContain('5 turns');
+    expect(content).toContain('/home/user/project');
+    expect(content).toContain('abcdef12');
   });
 
   it('builds error card with error message', () => {

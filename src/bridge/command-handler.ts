@@ -6,6 +6,9 @@ import { SessionManager } from '../claude/session-manager.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { AuditLogger } from '../utils/audit-logger.js';
 import type { DocSync } from '../sync/doc-sync.js';
+import { ensureSkillInstalled, ensureSkillsInstalled } from '../utils/skill-installer.js';
+
+const CONTRIBUTION_SKILLS = ['report-bug', 'fix-issue', 'request-feature'];
 
 export class CommandHandler {
   private docSync: DocSync | null = null;
@@ -44,6 +47,8 @@ export class CommandHandler {
           '`/stop` - Abort current running task',
           '`/status` - Show current session info',
           '`/memory` - Memory document commands',
+          '`/model [opus|sonnet|haiku]` - View or switch Claude model',
+          '`/effort [low|medium|high|max]` - View or switch effort level',
           '`/help` - Show this help message',
           '',
           '**Usage:**',
@@ -58,6 +63,11 @@ export class CommandHandler {
           '**Sync Commands:**',
           '`/sync` - Sync MetaMemory to Feishu Wiki',
           '`/sync status` - Show sync status',
+          '',
+          '**Contributing:**',
+          '`/report-bug <description>` - Report a bug (creates GitHub issue)',
+          '`/request-feature <idea>` - Request a feature (creates GitHub issue)',
+          '`/fix-issue <number|list>` - Pick and fix a GitHub issue (creates PR)',
         ].join('\n'));
         return true;
 
@@ -86,12 +96,49 @@ export class CommandHandler {
           `**Working Directory:** \`${session.workingDirectory}\``,
           `**Session:** ${session.sessionId ? `\`${session.sessionId.slice(0, 8)}...\`` : '_None_'}`,
           `**Running:** ${isRunning ? 'Yes ⏳' : 'No'}`,
+          `**Model:** \`${this.config.claude.model || 'default'}\``,
+          `**Effort:** ${this.config.claude.effort || 'max'}`,
         ].join('\n'));
+        return true;
+      }
+
+      case '/model': {
+        const VALID_MODELS = ['opus', 'sonnet', 'haiku'] as const;
+        const arg = text.slice('/model'.length).trim().toLowerCase();
+        if (!arg) {
+          const current = this.config.claude.model || 'default';
+          await this.sender.sendTextNotice(chatId, '🤖 Model', `Current: **${current}**\n\nUsage: \`/model opus|sonnet|haiku\``, 'blue');
+        } else if (VALID_MODELS.includes(arg as any)) {
+          const prev = this.config.claude.model || 'default';
+          this.config.claude.model = arg;
+          this.sessionManager.resetSession(chatId);
+          await this.sender.sendTextNotice(chatId, '✅ Model Changed', `**${prev}** → **${arg}**\nSession reset to apply new model.`, 'green');
+        } else {
+          await this.sender.sendTextNotice(chatId, '❌ Invalid Model', `\`${arg}\` is not valid. Use: \`opus\`, \`sonnet\`, or \`haiku\``, 'red');
+        }
+        return true;
+      }
+
+      case '/effort': {
+        const VALID_LEVELS = ['low', 'medium', 'high', 'max'] as const;
+        const arg = text.slice('/effort'.length).trim().toLowerCase();
+        if (!arg) {
+          const current = this.config.claude.effort || 'max';
+          await this.sender.sendTextNotice(chatId, '⚡ Effort Level', `Current: **${current}**\n\nUsage: \`/effort low|medium|high|max\``, 'blue');
+        } else if (VALID_LEVELS.includes(arg as any)) {
+          const prev = this.config.claude.effort || 'max';
+          this.config.claude.effort = arg as typeof VALID_LEVELS[number];
+          await this.sender.sendTextNotice(chatId, '✅ Effort Level Changed', `**${prev}** → **${arg}**`, 'green');
+        } else {
+          await this.sender.sendTextNotice(chatId, '❌ Invalid Effort Level', `\`${arg}\` is not valid. Use: \`low\`, \`medium\`, \`high\`, or \`max\``, 'red');
+        }
         return true;
       }
 
       case '/memory': {
         const args = text.slice('/memory'.length).trim();
+        // Ensure metamemory skill is available to all Claude sessions
+        ensureSkillInstalled('metamemory', this.logger).catch(() => {});
         await this.handleMemoryCommand(chatId, args);
         return true;
       }
@@ -101,6 +148,13 @@ export class CommandHandler {
         await this.handleSyncCommand(chatId, args);
         return true;
       }
+
+      case '/report-bug':
+      case '/fix-issue':
+      case '/request-feature':
+        // Install contribution skills so Claude can use them regardless of working directory
+        ensureSkillsInstalled(CONTRIBUTION_SKILLS, this.logger).catch(() => {});
+        return false; // pass through to Claude
 
       default:
         // Unrecognized /xxx commands — not handled here, pass through to Claude

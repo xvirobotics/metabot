@@ -7,7 +7,7 @@ import type { IncomingMessage, CardState, PendingQuestion } from '../types.js';
 import type { IMessageSender } from './message-sender.interface.js';
 import type { DocSync } from '../sync/doc-sync.js';
 import { ClaudeExecutor, type ExecutionHandle } from '../claude/executor.js';
-import { StreamProcessor } from '../claude/stream-processor.js';
+import { StreamProcessor, type StreamProcessorConfig } from '../claude/stream-processor.js';
 import { SessionManager } from '../claude/session-manager.js';
 import { RateLimiter } from './rate-limiter.js';
 import { OutputsManager } from './outputs-manager.js';
@@ -17,6 +17,7 @@ import { CommandHandler } from './command-handler.js';
 import { OutputHandler } from './output-handler.js';
 import { CostTracker } from '../utils/cost-tracker.js';
 import { metrics } from '../utils/metrics.js';
+import { splitResponseText } from '../feishu/card-builder.js';
 import type { SessionRegistry } from '../session/session-registry.js';
 
 const TASK_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -24,6 +25,7 @@ const QUESTION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes for user to answer
 const MAX_QUEUE_SIZE = 5; // max queued messages per chat
 const IDLE_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour idle → abort
 const FINAL_CARD_RETRIES = 3;
+const MAX_CONSECUTIVE_AUTO_ANSWERS = 3; // abort after this many unanswered permission prompts in a row
 const FINAL_CARD_BASE_DELAY_MS = 2000;
 const TASK_TIMEOUT_MESSAGE = 'Task timed out (24 hour limit)';
 const IDLE_TIMEOUT_MESSAGE = 'Task aborted: no activity for 1 hour';
@@ -35,6 +37,31 @@ interface PendingBatch {
   messages: IncomingMessage[];
   timerId: ReturnType<typeof setTimeout>;
 }
+
+// Two-tier 403 retry strategy: 3x 1min, then 2x 5min
+const RETRY_TIERS: Array<{ count: number; delayMs: number }> = [
+  { count: 3, delayMs: 60_000 },   // tier 1: 3 retries, 1 min each
+  { count: 2, delayMs: 300_000 },  // tier 2: 2 retries, 5 min each
+];
+
+export function is403Error(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as Record<string, unknown>;
+  const msg = String(e.message || '');
+  const status = e.status ?? e.statusCode ?? e.code;
+  return status === 403 || status === '403' || /\b403\b/.test(msg) || /forbidden/i.test(msg) || /rate.limit/i.test(msg);
+}
+
+export function getRetryDelay(attempt: number): number | null {
+  let remaining = attempt;
+  for (const tier of RETRY_TIERS) {
+    if (remaining < tier.count) return tier.delayMs;
+    remaining -= tier.count;
+  }
+  return null; // max retries exceeded
+}
+
+const MAX_403_RETRIES = RETRY_TIERS.reduce((sum, t) => sum + t.count, 0);
 
 interface RunningTask {
   abortController: AbortController;
@@ -50,6 +77,8 @@ interface RunningTask {
   processor: StreamProcessor;
   rateLimiter: RateLimiter;
   chatId: string;
+  consecutiveAutoAnswers: number;
+  abortReason?: string;
 }
 
 export interface ApiTaskOptions {
@@ -57,6 +86,7 @@ export interface ApiTaskOptions {
   chatId: string;
   userId?: string;
   sendCards?: boolean;
+  freshSession?: boolean;
   /** Override maxTurns for this task (e.g. 1 for voice mode). */
   maxTurns?: number;
   /** Override model for this task (e.g. faster model for voice calls). */
@@ -196,9 +226,19 @@ export class MessageBridge {
     if (queue.length === 0) {
       this.messageQueues.delete(chatId);
     }
-    this.executeQuery(next).catch((err) => {
-      this.logger.error({ err, chatId }, 'Error processing queued message');
-    });
+    // If this was a queued API task, route back through executeApiTask
+    const apiResolve = (next as any)._apiTaskResolve as ((r: ApiTaskResult) => void) | undefined;
+    const apiOptions = (next as any)._apiTaskOptions as ApiTaskOptions | undefined;
+    if (apiResolve && apiOptions) {
+      this.executeApiTask(apiOptions).then(apiResolve).catch((err) => {
+        this.logger.error({ err, chatId }, 'Error processing queued API task');
+        apiResolve({ success: false, responseText: '', error: err.message || 'Queue processing error' });
+      });
+    } else {
+      this.executeQuery(next).catch((err) => {
+        this.logger.error({ err, chatId }, 'Error processing queued message');
+      });
+    }
   }
 
   async handleMessage(msg: IncomingMessage): Promise<void> {
@@ -361,8 +401,8 @@ export class MessageBridge {
       return;
     }
 
-    // All questions in this call answered — send combined result
-    const answerJson = JSON.stringify({ answers: task.collectedAnswers });
+    // All questions in this call answered — resolve the PreToolUse hook
+    const collectedAnswers = { ...task.collectedAnswers };
 
     if (task.questionTimeoutId) {
       clearTimeout(task.questionTimeoutId);
@@ -372,11 +412,11 @@ export class MessageBridge {
     task.currentQuestionIndex = 0;
     task.collectedAnswers = {};
     task.processor.clearPendingQuestion();
+    task.consecutiveAutoAnswers = 0; // user responded — reset loop counter
 
-    const sessionId = task.processor.getSessionId() || '';
-    task.executionHandle.sendAnswer(pending.toolUseId, sessionId, answerJson);
+    task.executionHandle.resolveQuestion(pending.toolUseId, collectedAnswers);
 
-    this.logger.info({ chatId, answers: task.collectedAnswers, toolUseId: pending.toolUseId }, 'Sent all answers to Claude');
+    this.logger.info({ chatId, answers: collectedAnswers, toolUseId: pending.toolUseId }, 'Sent all answers to Claude');
 
     // Check if there are more queued AskUserQuestion calls
     const nextPending = task.processor.getPendingQuestion();
@@ -436,14 +476,13 @@ export class MessageBridge {
       }
     }
 
-    const answerJson = JSON.stringify({ answers: task.collectedAnswers });
+    const collectedAnswers = { ...task.collectedAnswers };
     task.pendingQuestion = null;
     task.currentQuestionIndex = 0;
     task.collectedAnswers = {};
     task.processor.clearPendingQuestion();
 
-    const sid = task.processor.getSessionId() || '';
-    task.executionHandle.sendAnswer(pending.toolUseId, sid, answerJson);
+    task.executionHandle.resolveQuestion(pending.toolUseId, collectedAnswers);
   }
 
   /** Check if message is a media message with default (auto-generated) text. */
@@ -584,12 +623,20 @@ export class MessageBridge {
     const displayPrompt = hasMedia && mediaCount > 1
       ? `🖼️ [${mediaCount} files] ${text}`
       : fileKey ? '📎 ' + text : imageKey ? '🖼️ ' + text : text;
-    const processor = new StreamProcessor(displayPrompt);
+    const taskStartTime = Date.now();
+    const processorConfig: StreamProcessorConfig = {
+      model: this.config.claude.model,
+      thinking: this.config.claude.thinking ? String((this.config.claude.thinking as Record<string, unknown>).type || '') : undefined,
+      effort: this.config.claude.effort,
+      startTime: taskStartTime,
+    };
+    const processor = new StreamProcessor(displayPrompt, processorConfig, cwd);
     const initialState: CardState = {
       status: 'thinking',
       userPrompt: displayPrompt,
       responseText: '',
       toolCalls: [],
+      startTime: taskStartTime,
     };
 
     const messageId = await this.sender.sendCard(chatId, initialState);
@@ -602,7 +649,7 @@ export class MessageBridge {
     const apiContext = { botName: this.config.name, chatId };
 
     // Start multi-turn execution
-    const executionHandle = this.executor.startExecution({
+    let executionHandle = this.executor.startExecution({
       prompt,
       cwd,
       sessionId: session.sessionId,
@@ -626,6 +673,7 @@ export class MessageBridge {
       processor,
       rateLimiter,
       chatId,
+      consecutiveAutoAnswers: 0,
     };
     this.runningTasks.set(chatId, runningTask);
     metrics.setGauge('metabot_active_tasks', this.runningTasks.size);
@@ -657,91 +705,171 @@ export class MessageBridge {
     resetIdleTimer();
 
     let lastState: CardState = initialState;
+    let retryAttempt = 0;
+
+    // Periodic timer to update card during thinking/running (shows elapsed time)
+    const thinkingTimerId = setInterval(() => {
+      if (lastState.startTime && (lastState.status === 'thinking' || lastState.status === 'running')) {
+        // Re-render the card with updated elapsed time
+        rateLimiter.schedule(() => this.sender.updateCard(messageId, lastState));
+      }
+    }, 3000);
 
     try {
-      for await (const message of executionHandle.stream) {
-        if (abortController.signal.aborted) break;
-        resetIdleTimer();
+      // Retry loop for 403 errors (two-tier: 3x1min + 2x5min)
+      let streamDone = false;
+      while (!streamDone) {
+        try {
+          for await (const message of executionHandle.stream) {
+            if (abortController.signal.aborted) { streamDone = true; break; }
+            resetIdleTimer();
 
-        const state = processor.processMessage(message);
-        lastState = state;
+            const state = processor.processMessage(message);
+            lastState = state;
 
-        // Update session ID if discovered
-        const newSessionId = processor.getSessionId();
-        if (newSessionId && newSessionId !== session.sessionId) {
-          this.sessionManager.setSessionId(chatId, newSessionId);
-        }
-
-        // Check if we hit a waiting_for_input state
-        if (state.status === 'waiting_for_input' && state.pendingQuestion) {
-          // Only initialize tracking when we see a NEW question call
-          if (!runningTask.pendingQuestion || runningTask.pendingQuestion.toolUseId !== state.pendingQuestion.toolUseId) {
-            runningTask.pendingQuestion = state.pendingQuestion;
-            runningTask.currentQuestionIndex = 0;
-            runningTask.collectedAnswers = {};
-          }
-
-          await rateLimiter.flush();
-
-          // Show only the current question (not all at once)
-          const pending = runningTask.pendingQuestion;
-          const currentQ = pending.questions[runningTask.currentQuestionIndex];
-          const displayQuestion: PendingQuestion = {
-            toolUseId: pending.toolUseId,
-            questions: currentQ ? [currentQ] : pending.questions,
-          };
-          const progress = pending.questions.length > 1
-            ? ` (${runningTask.currentQuestionIndex + 1}/${pending.questions.length})`
-            : '';
-          await this.sender.updateCard(messageId, {
-            ...state,
-            pendingQuestion: displayQuestion,
-            // Append progress indicator to response if multi-question
-            responseText: progress
-              ? (state.responseText || '') + (state.responseText ? '\n\n' : '') + `_Question${progress}_`
-              : state.responseText,
-          });
-
-          // Set/reset timeout for auto-answer
-          if (runningTask.questionTimeoutId) {
-            clearTimeout(runningTask.questionTimeoutId);
-          }
-          runningTask.questionTimeoutId = setTimeout(() => {
-            this.autoAnswerRemainingQuestions(runningTask);
-          }, QUESTION_TIMEOUT_MS);
-
-          continue;
-        }
-
-        // Detect SDK-handled tools for side effects (plan content display).
-        // Do NOT call sendAnswer — the SDK auto-responds in bypassPermissions mode.
-        // Sending a duplicate tool_result causes API 400 errors.
-        const sdkTools = processor.drainSdkHandledTools();
-        for (const tool of sdkTools) {
-          this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'Detected SDK-handled tool');
-          if (tool.name === 'ExitPlanMode') {
-            await this.sendPlanContent(chatId, processor, state);
-          }
-        }
-
-        // If we just got a message after answering a question, clear timeout state
-        if (runningTask.pendingQuestion === null && runningTask.questionTimeoutId) {
-          clearTimeout(runningTask.questionTimeoutId);
-          runningTask.questionTimeoutId = undefined;
-        }
-
-        // Break on final states
-        if (state.status === 'complete' || state.status === 'error') {
-          break;
-        }
-
-        // Throttled card update for non-final states (skip if aborted)
-        if (!abortController.signal.aborted) {
-          rateLimiter.schedule(() => {
-            if (!abortController.signal.aborted) {
-              this.sender.updateCard(messageId, state);
+            // Update session ID if discovered
+            const newSessionId = processor.getSessionId();
+            if (newSessionId && newSessionId !== session.sessionId) {
+              this.sessionManager.setSessionId(chatId, newSessionId);
             }
-          });
+
+            // Check if we hit a waiting_for_input state
+            if (state.status === 'waiting_for_input' && state.pendingQuestion) {
+              // Only initialize tracking when we see a NEW question call
+              if (!runningTask.pendingQuestion || runningTask.pendingQuestion.toolUseId !== state.pendingQuestion.toolUseId) {
+                runningTask.pendingQuestion = state.pendingQuestion;
+                runningTask.currentQuestionIndex = 0;
+                runningTask.collectedAnswers = {};
+              }
+
+              await rateLimiter.flush();
+
+              // Show only the current question (not all at once)
+              const pending = runningTask.pendingQuestion;
+              const currentQ = pending.questions[runningTask.currentQuestionIndex];
+              const displayQuestion: PendingQuestion = {
+                toolUseId: pending.toolUseId,
+                questions: currentQ ? [currentQ] : pending.questions,
+              };
+              const progress = pending.questions.length > 1
+                ? ` (${runningTask.currentQuestionIndex + 1}/${pending.questions.length})`
+                : '';
+              await this.sender.updateCard(messageId, {
+                ...state,
+                pendingQuestion: displayQuestion,
+                // Append progress indicator to response if multi-question
+                responseText: progress
+                  ? (state.responseText || '') + (state.responseText ? '\n\n' : '') + `_Question${progress}_`
+                  : state.responseText,
+              });
+
+              // Set/reset timeout for auto-answer with permission loop detection
+              if (runningTask.questionTimeoutId) {
+                clearTimeout(runningTask.questionTimeoutId);
+              }
+              runningTask.questionTimeoutId = setTimeout(() => {
+                this.logger.warn({ chatId }, 'Question timeout, auto-answering');
+                const pendingQ = runningTask.pendingQuestion;
+                if (pendingQ) {
+                  runningTask.consecutiveAutoAnswers++;
+                  if (runningTask.consecutiveAutoAnswers >= MAX_CONSECUTIVE_AUTO_ANSWERS) {
+                    this.logger.warn({ chatId, count: runningTask.consecutiveAutoAnswers }, 'Permission loop detected, aborting task');
+                    runningTask.pendingQuestion = null;
+                    processor.clearPendingQuestion();
+                    runningTask.abortReason = 'Permission request loop detected: Claude repeatedly asked for permission without user response. Please try again with a more specific instruction.';
+                    executionHandle.finish();
+                    abortController.abort();
+                    return;
+                  }
+                  this.autoAnswerRemainingQuestions(runningTask);
+                }
+              }, QUESTION_TIMEOUT_MS);
+
+              continue;
+            }
+
+            // Auto-respond to interactive tools that don't need user input (ExitPlanMode, etc.)
+            const autoTools = processor.drainAutoRespondTools();
+            for (const tool of autoTools) {
+              const sid = processor.getSessionId() || '';
+              const response = getAutoResponse(tool.name);
+              this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'Auto-responding to interactive tool');
+
+              // ExitPlanMode: send plan content to user before auto-responding
+              if (tool.name === 'ExitPlanMode') {
+                await this.sendPlanContent(chatId, processor, state);
+              }
+
+              executionHandle.sendAnswer(tool.toolUseId, sid, response);
+            }
+
+            // If we just got a message after answering a question, clear timeout state
+            if (runningTask.pendingQuestion === null && runningTask.questionTimeoutId) {
+              clearTimeout(runningTask.questionTimeoutId);
+              runningTask.questionTimeoutId = undefined;
+            }
+
+            // Break on final states
+            if (state.status === 'complete') {
+              streamDone = true;
+              break;
+            }
+            if (state.status === 'error') {
+              // Check if the error is a 403 — throw to trigger retry in catch block
+              if (state.errorMessage && is403Error({ message: state.errorMessage })) {
+                throw new Error(state.errorMessage);
+              }
+              streamDone = true;
+              break;
+            }
+
+            // Throttled card update for non-final states
+            rateLimiter.schedule(() => {
+              this.sender.updateCard(messageId, state).catch(() => {});
+            });
+          }
+          // Stream ended normally
+          streamDone = true;
+        } catch (streamErr: any) {
+          // 403 auto-retry: update card with retry status, wait, resume session
+          if (is403Error(streamErr) && !abortController.signal.aborted) {
+            const delay = getRetryDelay(retryAttempt);
+            if (delay !== null) {
+              retryAttempt++;
+              const delaySec = Math.round(delay / 1000);
+              const delayLabel = delaySec >= 60 ? `${delaySec / 60}min` : `${delaySec}s`;
+              this.logger.warn({ chatId, retryAttempt, maxRetries: MAX_403_RETRIES, delay: delayLabel }, '403 error, retrying');
+
+              // Update card to show retry countdown (preserve partial content)
+              const retryState: CardState = {
+                ...lastState,
+                status: 'thinking',
+                errorMessage: undefined,
+                retryInfo: `Rate limited — retry ${retryAttempt}/${MAX_403_RETRIES} in ${delayLabel}...`,
+              };
+              await rateLimiter.cancelAndWait();
+              await this.sender.updateCard(messageId, retryState);
+
+              await new Promise((r) => setTimeout(r, delay));
+              if (abortController.signal.aborted) throw streamErr;
+
+              // Resume with existing session or retry fresh
+              const resumeSessionId = processor.getSessionId() || session.sessionId;
+              try { executionHandle.finish(); } catch { /* ignore */ }
+              executionHandle = this.executor.startExecution({
+                prompt: resumeSessionId ? 'continue' : prompt,
+                cwd,
+                sessionId: resumeSessionId,
+                abortController,
+                outputsDir,
+                apiContext,
+              });
+              runningTask.executionHandle = executionHandle;
+              lastState = { ...lastState, retryInfo: undefined };
+              continue; // re-enter while loop with new stream
+            }
+          }
+          throw streamErr; // non-403 or max retries exceeded
         }
       }
 
@@ -754,7 +882,7 @@ export class MessageBridge {
         } else if (idledOut) {
           lastState = { ...lastState, status: 'error', errorMessage: IDLE_TIMEOUT_MESSAGE };
         } else if (abortController.signal.aborted) {
-          lastState = { ...lastState, status: 'error', errorMessage: 'Task was stopped' };
+          lastState = { ...lastState, status: 'error', errorMessage: runningTask.abortReason || 'Task was stopped' };
         } else {
           this.logger.warn({ chatId }, 'Stream ended without result message, forcing complete state');
           lastState = {
@@ -765,9 +893,9 @@ export class MessageBridge {
         }
       }
 
-      // Auto-retry with fresh session when Claude can't find the conversation
-      if (lastState.status === 'error' && isStaleSessionError(lastState.errorMessage) && session.sessionId) {
-        this.logger.info({ chatId }, 'Stale session detected, retrying with fresh session');
+      // Auto-clear stale session when Claude can't find the conversation
+      if (lastState.status === 'error' && isStaleSessionError(lastState.errorMessage)) {
+        this.logger.info({ chatId }, 'Clearing stale session ID due to conversation not found');
         this.sessionManager.resetSession(chatId);
         lastState = { ...lastState, status: 'running', errorMessage: undefined };
         await this.sender.updateCard(messageId, { ...lastState, responseText: '_Session expired, retrying..._' });
@@ -906,6 +1034,7 @@ export class MessageBridge {
       await rateLimiter.cancelAndWait();
       await this.sendFinalCard(messageId, errorState, chatId);
     } finally {
+      clearInterval(thinkingTimerId);
       clearTimeout(timeoutId);
       if (idleTimerId) clearTimeout(idleTimerId);
       if (runningTask.questionTimeoutId) {
@@ -932,10 +1061,34 @@ export class MessageBridge {
   }
 
   async executeApiTask(options: ApiTaskOptions): Promise<ApiTaskResult> {
-    const { prompt, chatId, userId = 'api', sendCards = false } = options;
+    const { prompt, chatId, userId = 'api', sendCards = false, freshSession = false } = options;
+
+    // Clear session before execution so each run starts with a clean context
+    if (freshSession) {
+      this.sessionManager.resetSession(chatId);
+      this.logger.info({ chatId }, 'Fresh session: cleared previous session');
+    }
 
     if (this.runningTasks.has(chatId)) {
-      return { success: false, responseText: '', error: 'Chat is busy with another task' };
+      // Queue the API task and wait for it to complete instead of rejecting
+      const queue = this.messageQueues.get(chatId) || [];
+      if (queue.length >= MAX_QUEUE_SIZE) {
+        return { success: false, responseText: '', error: `Queue full (${MAX_QUEUE_SIZE} pending). Try again later.` };
+      }
+      this.logger.info({ chatId, userId, queuePos: queue.length + 1 }, 'API task queued (chat busy)');
+      return new Promise<ApiTaskResult>((resolve) => {
+        const queuedMsg: IncomingMessage = {
+          chatId,
+          userId,
+          text: prompt,
+          messageId: `api-${Date.now()}`,
+          _apiTaskResolve: resolve,
+          _apiTaskOptions: options,
+        } as any;
+        queue.push(queuedMsg);
+        this.messageQueues.set(chatId, queue);
+        this.audit.log({ event: 'task_queued', botName: this.config.name, chatId, userId, prompt, meta: { position: queue.length } });
+      });
     }
 
     const session = this.sessionManager.getSession(chatId);
@@ -945,7 +1098,14 @@ export class MessageBridge {
     const outputsDir = this.outputsManager.prepareDir(chatId);
 
     const displayPrompt = prompt;
-    const processor = new StreamProcessor(displayPrompt);
+    const taskStartTime = Date.now();
+    const processorConfig: StreamProcessorConfig = {
+      model: this.config.claude.model,
+      thinking: this.config.claude.thinking ? String((this.config.claude.thinking as Record<string, unknown>).type || '') : undefined,
+      effort: this.config.claude.effort,
+      startTime: taskStartTime,
+    };
+    const processor = new StreamProcessor(displayPrompt, processorConfig, cwd);
     const rateLimiter = new RateLimiter(1500);
 
     const initialState: CardState = {
@@ -953,6 +1113,7 @@ export class MessageBridge {
       userPrompt: displayPrompt,
       responseText: '',
       toolCalls: [],
+      startTime: taskStartTime,
     };
 
     let messageId: string | undefined;
@@ -966,7 +1127,7 @@ export class MessageBridge {
 
     const apiContext = { botName: this.config.name, chatId, groupMembers: options.groupMembers, groupId: options.groupId };
 
-    const executionHandle = this.executor.startExecution({
+    let executionHandle = this.executor.startExecution({
       prompt,
       cwd,
       sessionId: session.sessionId,
@@ -990,6 +1151,7 @@ export class MessageBridge {
       processor,
       rateLimiter,
       chatId,
+      consecutiveAutoAnswers: 0,
     };
     this.runningTasks.set(chatId, runningTask);
     metrics.setGauge('metabot_active_tasks', this.runningTasks.size);
@@ -1024,59 +1186,123 @@ export class MessageBridge {
       responseText: '',
       toolCalls: [],
     };
+    let retryAttempt = 0;
 
     try {
-      for await (const message of executionHandle.stream) {
-        if (abortController.signal.aborted) break;
-        resetIdleTimer();
+      // Retry loop for 403 errors (two-tier: 3x1min + 2x5min)
+      let streamDone = false;
+      while (!streamDone) {
+        try {
+          for await (const message of executionHandle.stream) {
+            if (abortController.signal.aborted) { streamDone = true; break; }
+            resetIdleTimer();
 
-        const state = processor.processMessage(message);
-        lastState = state;
+            const state = processor.processMessage(message);
+            lastState = state;
 
-        const newSessionId = processor.getSessionId();
-        if (newSessionId && newSessionId !== session.sessionId) {
-          this.sessionManager.setSessionId(chatId, newSessionId);
-        }
+            const newSessionId = processor.getSessionId();
+            if (newSessionId && newSessionId !== session.sessionId) {
+              this.sessionManager.setSessionId(chatId, newSessionId);
+            }
 
-        if (state.status === 'waiting_for_input' && state.pendingQuestion) {
-          const pending = state.pendingQuestion;
-          if (options.onQuestion) {
-            // Notify the caller about the question state
-            options.onUpdate?.(state, effectiveMessageId, false);
-            // Wait for the caller to provide an answer
-            const answerJson = await options.onQuestion(pending);
-            processor.clearPendingQuestion();
-            const sid = processor.getSessionId() || '';
-            executionHandle.sendAnswer(pending.toolUseId, sid, answerJson);
-          } else {
-            // Auto-answer when no onQuestion handler is provided
-            processor.clearPendingQuestion();
-            const sid = processor.getSessionId() || '';
-            const autoAnswer = JSON.stringify({ answers: { _auto: 'Please decide on your own and proceed.' } });
-            executionHandle.sendAnswer(pending.toolUseId, sid, autoAnswer);
+            if (state.status === 'waiting_for_input' && state.pendingQuestion) {
+              const pending = state.pendingQuestion;
+              if (options.onQuestion) {
+                // Notify the caller about the question state
+                options.onUpdate?.(state, effectiveMessageId, false);
+                // Wait for the caller to provide an answer
+                const answerJson = await options.onQuestion(pending);
+                processor.clearPendingQuestion();
+                // Parse answers from JSON and resolve the hook
+                try {
+                  const parsed = JSON.parse(answerJson);
+                  executionHandle.resolveQuestion(pending.toolUseId, parsed.answers || {});
+                } catch {
+                  executionHandle.resolveQuestion(pending.toolUseId, { _answer: answerJson });
+                }
+              } else {
+                // Auto-answer when no onQuestion handler is provided
+                processor.clearPendingQuestion();
+                executionHandle.resolveQuestion(pending.toolUseId, { _auto: 'Please decide on your own and proceed.' });
+              }
+              continue;
+            }
+
+            // Auto-respond to interactive tools (ExitPlanMode, etc.)
+            const autoTools = processor.drainAutoRespondTools();
+            for (const tool of autoTools) {
+              const sid = processor.getSessionId() || '';
+              const response = getAutoResponse(tool.name);
+              this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'API task: auto-responding to interactive tool');
+
+              if (tool.name === 'ExitPlanMode' && sendCards) {
+                await this.sendPlanContent(chatId, processor, state);
+              }
+
+              executionHandle.sendAnswer(tool.toolUseId, sid, response);
+            }
+
+            if (state.status === 'complete') {
+              streamDone = true;
+              break;
+            }
+            if (state.status === 'error') {
+              if (state.errorMessage && is403Error({ message: state.errorMessage })) {
+                throw new Error(state.errorMessage);
+              }
+              streamDone = true;
+              break;
+            }
+
+            if (sendCards && messageId) {
+              rateLimiter.schedule(() => {
+                this.sender.updateCard(messageId!, state).catch(() => {});
+              });
+            }
           }
-          continue;
-        }
+          streamDone = true;
+        } catch (streamErr: any) {
+          // 403 auto-retry for API tasks
+          if (is403Error(streamErr) && !abortController.signal.aborted) {
+            const delay = getRetryDelay(retryAttempt);
+            if (delay !== null) {
+              retryAttempt++;
+              const delaySec = Math.round(delay / 1000);
+              const delayLabel = delaySec >= 60 ? `${delaySec / 60}min` : `${delaySec}s`;
+              this.logger.warn({ chatId, retryAttempt, maxRetries: MAX_403_RETRIES, delay: delayLabel }, 'API task 403, retrying');
 
-        // Detect SDK-handled tools for side effects only (no sendAnswer).
-        const sdkTools = processor.drainSdkHandledTools();
-        for (const tool of sdkTools) {
-          this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'API task: detected SDK-handled tool');
-          if (tool.name === 'ExitPlanMode' && sendCards) {
-            await this.sendPlanContent(chatId, processor, state);
+              if (sendCards && messageId) {
+                const retryState: CardState = {
+                  ...lastState,
+                  status: 'thinking',
+                  errorMessage: undefined,
+                  retryInfo: `Rate limited — retry ${retryAttempt}/${MAX_403_RETRIES} in ${delayLabel}...`,
+                };
+                await rateLimiter.cancelAndWait();
+                await this.sender.updateCard(messageId, retryState);
+              }
+
+              await new Promise((r) => setTimeout(r, delay));
+              if (abortController.signal.aborted) throw streamErr;
+
+              const resumeSessionId = processor.getSessionId() || session.sessionId;
+              try { executionHandle.finish(); } catch { /* ignore */ }
+              executionHandle = this.executor.startExecution({
+                prompt: resumeSessionId ? 'continue' : prompt,
+                cwd,
+                sessionId: resumeSessionId,
+                abortController,
+                outputsDir,
+                apiContext,
+              });
+              runningTask.executionHandle = executionHandle;
+              lastState = { ...lastState, retryInfo: undefined };
+              continue;
+            }
           }
+          throw streamErr;
         }
-
-        if (state.status === 'complete' || state.status === 'error') {
-          break;
-        }
-
-        if (sendCards && messageId) {
-          rateLimiter.schedule(() => {
-            this.sender.updateCard(messageId!, state);
-          });
-        }
-        options.onUpdate?.(state, effectiveMessageId, false);
+        options.onUpdate?.(lastState, effectiveMessageId, false);
       }
 
       await rateLimiter.cancelAndWait();
@@ -1097,9 +1323,8 @@ export class MessageBridge {
         }
       }
 
-      // Auto-retry with fresh session when Claude can't find the conversation
-      if (lastState.status === 'error' && isStaleSessionError(lastState.errorMessage) && session.sessionId) {
-        this.logger.info({ chatId }, 'API task: stale session detected, retrying with fresh session');
+      if (lastState.status === 'error' && isStaleSessionError(lastState.errorMessage)) {
+        this.logger.info({ chatId }, 'Clearing stale session ID due to conversation not found');
         this.sessionManager.resetSession(chatId);
         if (sendCards && messageId) {
           await this.sender.updateCard(messageId, { ...lastState, status: 'running', responseText: '_Session expired, retrying..._' });
@@ -1171,10 +1396,9 @@ export class MessageBridge {
     } catch (err: any) {
       this.logger.error({ err, chatId, userId }, 'API task execution error');
 
-      // Auto-retry with fresh session when Claude can't find the conversation
       const errMsg: string = err.message || '';
-      if (isStaleSessionError(errMsg) && session.sessionId) {
-        this.logger.info({ chatId }, 'API task: stale session in catch, retrying with fresh session');
+      if (isStaleSessionError(errMsg)) {
+        this.logger.info({ chatId }, 'Clearing stale session ID due to conversation not found');
         this.sessionManager.resetSession(chatId);
         if (sendCards && messageId) {
           await this.sender.updateCard(messageId, { ...lastState, status: 'running', responseText: '_Session expired, retrying..._' });
@@ -1276,29 +1500,61 @@ export class MessageBridge {
    * sends a plain text fallback so the user at least sees the result.
    */
   private async sendFinalCard(messageId: string, state: CardState, chatId?: string): Promise<void> {
+    // Split long responses into multiple cards
+    const chunks = state.responseText ? splitResponseText(state.responseText) : null;
+    const needsSplit = chunks !== null && chunks.length > 1;
+
+    const cardState = needsSplit
+      ? { ...state, responseText: chunks[0] + `\n\n---\n_📄 (1/${chunks.length})_` }
+      : state;
+
+    let updateSucceeded = false;
     for (let attempt = 0; attempt < FINAL_CARD_RETRIES; attempt++) {
       try {
-        await this.sender.updateCard(messageId, state);
+        await this.sender.updateCard(messageId, cardState);
         if (attempt > 0) {
           await new Promise((r) => setTimeout(r, FINAL_CARD_BASE_DELAY_MS));
-          await this.sender.updateCard(messageId, state);
+          await this.sender.updateCard(messageId, cardState);
         }
-        return;
+        updateSucceeded = true;
+        break;
       } catch {
         const delay = FINAL_CARD_BASE_DELAY_MS * Math.pow(2, attempt);
         this.logger.warn({ attempt, delay, messageId }, 'Final card update failed, retrying');
         await new Promise((r) => setTimeout(r, delay));
       }
     }
-    if (chatId) {
-      this.logger.error({ messageId, chatId }, 'All final card retries failed, sending text fallback');
-      const statusEmoji = state.status === 'complete' ? '✅' : '❌';
-      const summary = state.responseText
-        ? state.responseText.slice(0, 2000)
-        : state.errorMessage || 'Task finished';
-      try {
-        await this.sender.sendText(chatId, `${statusEmoji} ${summary}`);
-      } catch { /* last resort failed */ }
+
+    if (!updateSucceeded) {
+      if (chatId) {
+        this.logger.error({ messageId, chatId }, 'All final card retries failed, sending text fallback');
+        const statusEmoji = state.status === 'complete' ? '✅' : '❌';
+        const summary = state.responseText
+          ? state.responseText.slice(0, 2000)
+          : state.errorMessage || 'Task finished';
+        try {
+          await this.sender.sendText(chatId, `${statusEmoji} ${summary}`);
+        } catch { /* last resort failed */ }
+      }
+      return;
+    }
+
+    // Send continuation cards for remaining chunks
+    if (needsSplit && chatId) {
+      this.logger.info({ chatId, totalChunks: chunks.length }, 'Sending continuation cards for long response');
+      for (let i = 1; i < chunks.length; i++) {
+        try {
+          await new Promise((r) => setTimeout(r, 1500));
+          await this.sender.sendTextNotice(
+            chatId,
+            `📄 Continued (${i + 1}/${chunks.length})`,
+            chunks[i] + `\n\n---\n_📄 (${i + 1}/${chunks.length})_`,
+            'green',
+          );
+        } catch {
+          this.logger.warn({ chatId, chunk: i + 1, total: chunks.length }, 'Failed to send continuation card');
+        }
+      }
     }
   }
 
@@ -1387,11 +1643,12 @@ export class MessageBridge {
     }
   }
 
-  destroy(): void {
+  async destroy(): Promise<void> {
     for (const [, batch] of this.pendingBatches) {
       clearTimeout(batch.timerId);
     }
     this.pendingBatches.clear();
+    const updatePromises: Promise<void>[] = [];
     for (const [chatId, task] of this.runningTasks) {
       if (task.questionTimeoutId) {
         clearTimeout(task.questionTimeoutId);
@@ -1399,7 +1656,25 @@ export class MessageBridge {
       task.executionHandle.finish();
       task.abortController.abort();
       this.logger.info({ chatId }, 'Aborted running task during shutdown');
+
+      // Send final card update preserving existing content from the processor
+      if (task.cardMessageId) {
+        const currentState = task.processor.processMessage({ type: 'system', subtype: 'noop' } as any);
+        const finalState: CardState = {
+          ...currentState,
+          status: 'error',
+          errorMessage: task.abortReason || 'Service restarted',
+        };
+        updatePromises.push(
+          this.sender.updateCard(task.cardMessageId, finalState).catch(() => {}),
+        );
+      }
     }
+    // Wait briefly for card updates to complete
+    await Promise.race([
+      Promise.all(updatePromises),
+      new Promise<void>((r) => setTimeout(r, 3000)),
+    ]);
     this.runningTasks.clear();
     this.sessionManager.destroy();
   }
@@ -1407,6 +1682,20 @@ export class MessageBridge {
 
 export function isStaleSessionError(errorMessage?: string): boolean {
   if (!errorMessage) return false;
-  return /no conversation found|conversation not found|session id|invalid session|multiple.*tool_result.*blocks|each tool_use must have a single result/i.test(errorMessage);
+  return /no conversation found|conversation not found|session id|invalid session|each tool_use must have a single result|multiple tool_result blocks/i.test(errorMessage);
 }
 
+/**
+ * Generate auto-response content for interactive tools that the bridge
+ * handles without user input (plan mode, etc.).
+ */
+function getAutoResponse(toolName: string): string {
+  switch (toolName) {
+    case 'ExitPlanMode':
+      return 'User approved the plan. Proceed with implementation.';
+    case 'EnterPlanMode':
+      return 'Plan mode approved. Explore the codebase and design your approach.';
+    default:
+      return 'Approved. Please continue.';
+  }
+}
