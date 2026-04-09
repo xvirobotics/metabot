@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![GitHub stars](https://img.shields.io/github/stars/Liyunlun/metabot?style=flat-square)](https://github.com/Liyunlun/metabot)
 
-中文 | [English](README_EN.md) | [文档站](https://liyunlun.github.io/metabot/zh/)
+中文 | [English](README_EN.md) | [文档站](https://xvirobotics.com/metabot/zh/)
 
 > 在飞书中设定一个每天早上9点自动搜索 AI 新闻并保存到 MetaMemory 的定时任务 — Thinking → Running → Complete，全程流式展示。
 
@@ -87,7 +87,7 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 
 **技术栈**：React 19 + Vite + Zustand + react-markdown
 
-> 语音功能需要 HTTPS。推荐用 Caddy 反向代理，自动管理证书。详见 [Web UI 文档](https://liyunlun.github.io/metabot/zh/features/web-ui/)。
+> 语音功能需要 HTTPS。推荐用 Caddy 反向代理，自动管理证书。详见 [Web UI 文档](https://xvirobotics.com/metabot/zh/features/web-ui/)。
 
 ## 核心能力
 
@@ -114,7 +114,7 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 
 1. iPhone 微信 8.0.70+ → 设置 → 插件 → 开启 **ClawBot**
 2. 运行 `install.sh`，选 `3) WeChat ClawBot` — 扫码绑定
-3. 详见 [微信接入指南](https://liyunlun.github.io/metabot/zh/features/wechat/)
+3. 详见 [微信接入指南](https://xvirobotics.com/metabot/zh/features/wechat/)
 
 ### 飞书
 
