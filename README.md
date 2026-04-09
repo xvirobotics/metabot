@@ -4,7 +4,6 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/Liyunlun/metabot/ci.yml?branch=main&style=flat-square)](https://github.com/Liyunlun/metabot/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
-[![GitHub stars](https://img.shields.io/github/stars/Liyunlun/metabot?style=flat-square)](https://github.com/Liyunlun/metabot)
 
 中文 | [English](README_EN.md) | [文档站](https://xvirobotics.com/metabot/zh/)
 
@@ -414,10 +413,6 @@ npm run build        # TypeScript 编译
 MetaBot 由 [XVI Robotics](https://xvirobotics.com) 打造（人形机器人大脑公司）。我们在内部用 MetaBot 把公司打造成 **Agent Native 组织** —— 一个小团队的人类，监督自我进化的 AI Agent。
 
 我们开源它，因为我们相信这是未来公司的运行方式。
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Liyunlun/metabot&type=Date)](https://star-history.com/#Liyunlun/metabot&Date)
 
 ## License
 

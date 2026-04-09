@@ -2,9 +2,8 @@
 
 **Control Claude Code from your phone via Feishu / Telegram / WeChat — write code, manage agents, automate everything.**
 
-[![CI](https://img.shields.io/github/actions/workflow/status/xvirobotics/metabot/ci.yml?branch=main&style=flat-square)](https://github.com/xvirobotics/metabot/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/Liyunlun/metabot/ci.yml?branch=main&style=flat-square)](https://github.com/Liyunlun/metabot/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
-[![GitHub stars](https://img.shields.io/github/stars/xvirobotics/metabot?style=flat-square)](https://github.com/xvirobotics/metabot)
 
 [中文](README.md) | English | [Docs](https://xvirobotics.com/metabot/)
 
@@ -415,10 +414,6 @@ npm run build        # TypeScript compile
 MetaBot is built by [XVI Robotics](https://xvirobotics.com) (humanoid robot brains). We use MetaBot internally to run our company as an **agent-native organization** — a small team of humans supervising self-improving AI agents.
 
 We open-sourced it because we believe this is how companies will work in the future.
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=xvirobotics/metabot&type=Date)](https://star-history.com/#xvirobotics/metabot&Date)
 
 ## License
 
