@@ -1,4 +1,5 @@
 import * as http from 'node:http';
+import * as path from 'node:path';
 import type * as lark from '@larksuiteoapi/node-sdk';
 import type { Logger } from '../utils/logger.js';
 import type { BotRegistry } from './bot-registry.js';
@@ -16,6 +17,7 @@ import { VoiceMeetingService } from './voice-meeting.js';
 import { VoiceIdentityStore } from './voice-identity.js';
 import { RtcVoiceChatService } from './rtc-voice-chat.js';
 import { ActivityStore } from './activity-store.js';
+import { SkillHubStore } from './skill-hub-store.js';
 import { metrics as _metrics } from '../utils/metrics.js';
 import type { SessionRegistry } from '../session/session-registry.js';
 import {
@@ -28,6 +30,7 @@ import {
   handleSyncRoutes,
   handleRtcRoutes,
   handleSessionRoutes,
+  handleSkillHubRoutes,
 } from './routes/index.js';
 import type { RouteContext } from './routes/index.js';
 
@@ -66,6 +69,7 @@ export function startApiServer(options: ApiServerOptions): http.Server {
   const meetingService = new VoiceMeetingService(registry, logger);
   const voiceIdentityStore = new VoiceIdentityStore(logger);
   const activityStore = new ActivityStore(logger);
+  const skillHubStore = new SkillHubStore(path.join(process.cwd(), 'data'), logger);
   const rtcService = new RtcVoiceChatService(logger);
   if (rtcService.isConfigured()) {
     logger.info('RTC voice chat service enabled');
@@ -83,6 +87,7 @@ export function startApiServer(options: ApiServerOptions): http.Server {
     ws,
     sessionRegistry: options.sessionRegistry,
     activityStore,
+    skillHubStore,
   };
 
   // Route handlers in priority order
@@ -95,6 +100,7 @@ export function startApiServer(options: ApiServerOptions): http.Server {
     handleSyncRoutes,
     handleRtcRoutes,
     handleSessionRoutes,
+    handleSkillHubRoutes,
   ];
 
   const server = http.createServer(async (req, res) => {
