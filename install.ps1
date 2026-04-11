@@ -513,6 +513,18 @@ New-Item -ItemType Directory -Path (Join-Path $SkillsDir "metabot") -Force | Out
 Copy-Item (Join-Path $MetabotHome "src\skills\metabot\SKILL.md") (Join-Path $SkillsDir "metabot\SKILL.md") -Force
 Write-Success "metabot skill installed -> $(Join-Path $SkillsDir 'metabot')"
 
+# Install voice skill
+Write-Info "Installing voice skill..."
+New-Item -ItemType Directory -Path (Join-Path $SkillsDir "voice") -Force | Out-Null
+Copy-Item (Join-Path $MetabotHome "src\skills\voice\SKILL.md") (Join-Path $SkillsDir "voice\SKILL.md") -Force
+Write-Success "voice skill installed -> $(Join-Path $SkillsDir 'voice')"
+
+# Install skill-hub skill
+Write-Info "Installing skill-hub skill..."
+New-Item -ItemType Directory -Path (Join-Path $SkillsDir "skill-hub") -Force | Out-Null
+Copy-Item (Join-Path $MetabotHome "src\skills\skill-hub\SKILL.md") (Join-Path $SkillsDir "skill-hub\SKILL.md") -Force
+Write-Success "skill-hub skill installed -> $(Join-Path $SkillsDir 'skill-hub')"
+
 # Install feishu-doc skill (only when Feishu is configured)
 $HasFeishu = $false
 if (-not $SkipConfig -and $SetupFeishu) {
@@ -549,7 +561,7 @@ if (-not $SkipConfig) {
 if ($DeployWorkDir) {
     $SkillsDest = Join-Path $DeployWorkDir ".claude\skills"
 
-    $deploySkills = @("metaskill", "metamemory", "metabot")
+    $deploySkills = @("metaskill", "metamemory", "metabot", "voice", "skill-hub")
     if ($HasFeishu) { $deploySkills += "feishu-doc" }
 
     foreach ($skill in $deploySkills) {
