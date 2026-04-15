@@ -592,6 +592,12 @@ mkdir -p "$SKILLS_DIR/voice"
 cp "$METABOT_HOME/src/skills/voice/SKILL.md" "$SKILLS_DIR/voice/SKILL.md"
 success "voice skill installed → $SKILLS_DIR/voice"
 
+# Install skill-hub skill (bundled in src/skills/skill-hub/)
+info "Installing skill-hub skill..."
+mkdir -p "$SKILLS_DIR/skill-hub"
+cp "$METABOT_HOME/src/skills/skill-hub/SKILL.md" "$SKILLS_DIR/skill-hub/SKILL.md"
+success "skill-hub skill installed → $SKILLS_DIR/skill-hub"
+
 # Detect Feishu bots
 HAS_FEISHU=false
 if [[ "$SKIP_CONFIG" == "false" && "$SETUP_FEISHU" == "true" ]]; then
@@ -682,7 +688,7 @@ if [[ -n "${DEPLOY_WORK_DIR:-}" ]]; then
   SKILLS_DEST="$DEPLOY_WORK_DIR/.claude/skills"
 
   # Copy skills (common + lark-cli skills if Feishu)
-  DEPLOY_SKILLS="metaskill metamemory metabot voice"
+  DEPLOY_SKILLS="metaskill metamemory metabot voice skill-hub"
   if [[ "$SETUP_LARK_CLI" == "true" ]]; then
     for lark_skill in lark-base lark-calendar lark-contact lark-doc lark-drive lark-event lark-im lark-mail lark-minutes lark-openapi-explorer lark-shared lark-sheets lark-skill-maker lark-task lark-vc lark-whiteboard lark-wiki lark-workflow-meeting-summary lark-workflow-standup-report; do
       [[ -d "$SKILLS_DIR/$lark_skill" ]] && DEPLOY_SKILLS="$DEPLOY_SKILLS $lark_skill"

@@ -1611,6 +1611,12 @@ export class MessageBridge {
     lastTurnText?: string,
     turnCount: number = 0,
   ): Promise<void> {
+    // Accumulate usage into session and inject cumulative cost for display
+    if (chatId && (state.status === 'complete' || state.status === 'error')) {
+      this.sessionManager.addUsage(chatId, state.totalTokens ?? 0, state.costUsd ?? 0, state.durationMs ?? 0);
+      const session = this.sessionManager.getSession(chatId);
+      state.sessionCostUsd = session.cumulativeCostUsd;
+    }
     let succeeded = false;
 
     if (turnCount > 0 && chatId) {
@@ -1825,7 +1831,7 @@ export class MessageBridge {
     const durationStr = durationMs >= 60_000
       ? `${(durationMs / 60_000).toFixed(1)}min`
       : `${(durationMs / 1000).toFixed(0)}s`;
-    const costStr = state.costUsd ? ` · $${state.costUsd.toFixed(2)}` : '';
+    const costStr = state.sessionCostUsd ? ` · $${state.sessionCostUsd.toFixed(2)}` : (state.costUsd ? ` · $${state.costUsd.toFixed(2)}` : '');
     const statusWord = state.status === 'complete' ? 'Done' : 'Failed';
 
     // Model display name: strip "claude-" prefix for brevity (e.g. "opus-4-6")

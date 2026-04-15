@@ -257,6 +257,62 @@ print(json.dumps(body))
         ;;
     esac
     ;;
+  # --- Skill Hub ---
+  skills|sk)
+    subcmd="${1:-list}"; shift 2>/dev/null || true
+    case "$subcmd" in
+      list|ls)
+        curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/skills" | _json
+        ;;
+      search|s)
+        query="$*"
+        if [[ -z "${query:-}" ]]; then echo "Usage: mb skills search <query>"; exit 1; fi
+        curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/skills/search?q=$(python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))' "$query")" | _json
+        ;;
+      get|g)
+        if [[ -z "${1:-}" ]]; then echo "Usage: mb skills get <name>"; exit 1; fi
+        curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/skills/$1" | _json
+        ;;
+      publish|pub)
+        bot="${1:-}" skill="${2:-}"
+        if [[ -z "$bot" || -z "$skill" ]]; then
+          echo "Usage: mb skills publish <botName> <skillName>"
+          exit 1
+        fi
+        curl -s -X POST "$METABOT_URL/api/skills/$skill/publish-from-bot" \
+          -H "$METABOT_AUTH" -H "Content-Type: application/json" \
+          -d "{\"botName\":\"$bot\"}" | _json
+        ;;
+      install|i)
+        skill="${1:-}" bot="${2:-}"
+        if [[ -z "$skill" || -z "$bot" ]]; then
+          echo "Usage: mb skills install <skillName> <botName>"
+          exit 1
+        fi
+        source="${3:-local}"
+        python3 -c "
+import json, sys
+print(json.dumps({'botName': sys.argv[1], 'source': sys.argv[2]}))
+" "$bot" "$source" | \
+        curl -s -X POST "$METABOT_URL/api/skills/$skill/install" \
+          -H "$METABOT_AUTH" -H "Content-Type: application/json" \
+          -d @- | _json
+        ;;
+      remove|rm)
+        if [[ -z "${1:-}" ]]; then echo "Usage: mb skills remove <name>"; exit 1; fi
+        curl -s -X DELETE "$METABOT_URL/api/skills/$1" -H "$METABOT_AUTH" | _json
+        ;;
+      *)
+        echo "mb skills - Skill Hub (shared skill registry)"
+        echo "  mb skills list                               - List all skills (local + peer)"
+        echo "  mb skills search <query>                     - Search skills by keyword"
+        echo "  mb skills get <name>                         - Get skill details"
+        echo "  mb skills publish <botName> <skillName>      - Publish a bot's skill to the hub"
+        echo "  mb skills install <skillName> <botName>      - Install a skill to a bot"
+        echo "  mb skills remove <name>                      - Unpublish a skill"
+        ;;
+    esac
+    ;;
   # --- Health ---
   health|h)
     curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/health" | _json
@@ -299,13 +355,14 @@ print(json.dumps(body))
     echo "==> Updating skills..."
     SKILLS_DIR="$HOME/.claude/skills"
     mkdir -p "$SKILLS_DIR"
-    for skill in metaskill metamemory metabot voice phone-call; do
+    for skill in metaskill metamemory metabot voice phone-call skill-hub; do
       case "$skill" in
         metaskill)   src="$METABOT_SRC/src/skills/metaskill" ;;
         metamemory)  src="$METABOT_SRC/src/memory/skill" ;;
         metabot)     src="$METABOT_SRC/src/skills/metabot" ;;
         voice)       src="$METABOT_SRC/src/skills/voice" ;;
         phone-call)  src="$METABOT_SRC/src/skills/phone-call" ;;
+        skill-hub)   src="$METABOT_SRC/src/skills/skill-hub" ;;
         *)           src="" ;;
       esac
       if [[ -n "$src" && -d "$src" ]]; then
@@ -336,7 +393,7 @@ print(json.dumps(body))
       if [[ -n "${work_dir:-}" ]]; then
         ws_skills_dir="$work_dir/.claude/skills"
         mkdir -p "$ws_skills_dir"
-        for skill in metaskill metamemory metabot voice phone-call; do
+        for skill in metaskill metamemory metabot voice phone-call skill-hub; do
           if [[ -d "$SKILLS_DIR/$skill" ]]; then
             mkdir -p "$ws_skills_dir/$skill"
             cp -r "$SKILLS_DIR/$skill/." "$ws_skills_dir/$skill/"
@@ -484,6 +541,12 @@ print(json.dumps(body))
     echo "    mb voice config                  - Check RTC configuration"
     echo "    mb voice tts \"text\" [--play] [-o f] - Text-to-speech (saves MP3)"
     echo ""
+    echo ""
+    echo "  Skill Hub:"
+    echo "    mb skills                        - List all shared skills"
+    echo "    mb skills search <query>         - Search skills"
+    echo "    mb skills publish <bot> <skill>  - Publish a skill"
+    echo "    mb skills install <skill> <bot>  - Install a skill to a bot"
     echo ""
     echo "  Monitoring:"
     echo "    mb stats                         - Cost & usage stats (per-bot, per-user)"

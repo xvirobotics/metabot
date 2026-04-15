@@ -388,6 +388,14 @@ export function buildCard(state: CardState): string {
       const ctxK = `${Math.round(state.contextWindow / 1000)}k`;
       parts.push(`ctx: ${tokensK}/${ctxK} (${pct}%)`);
     }
+    if (state.status === 'complete' || state.status === 'error') {
+      if (state.sessionCostUsd != null) {
+        parts.push(`$${state.sessionCostUsd.toFixed(2)}`);
+      }
+      if (state.model) {
+        parts.push(state.model.replace(/^claude-/, ''));
+      }
+    }
     if (state.durationMs !== undefined) {
       parts.push(`${(state.durationMs / 1000).toFixed(1)}s`);
     }

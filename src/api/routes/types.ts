@@ -17,6 +17,7 @@ import type { RtcVoiceChatService } from '../rtc-voice-chat.js';
 import type { WebSocketHandle } from '../../web/ws-server.js';
 import type { SessionRegistry } from '../../session/session-registry.js';
 import type { ActivityStore } from '../activity-store.js';
+import type { SkillHubStore } from '../skill-hub-store.js';
 
 export interface RouteContext {
   registry: BotRegistry;
@@ -39,6 +40,7 @@ export interface RouteContext {
   ws: { handle?: WebSocketHandle };
   sessionRegistry?: SessionRegistry;
   activityStore?: ActivityStore;
+  skillHubStore?: SkillHubStore;
 }
 
 /**

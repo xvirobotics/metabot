@@ -2,11 +2,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as url from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import type { Logger } from '../utils/logger.js';
 
 /** Skills installed for all platforms. */
-const COMMON_SKILLS = ['metaskill', 'metamemory', 'metabot', 'phone-call'];
+const COMMON_SKILLS = ['metaskill', 'metamemory', 'metabot', 'phone-call', 'skill-hub'];
 
 /** Lark CLI AI Agent skills — installed via `npx skills add larksuite/cli` and
  *  symlinked into ~/.claude/skills/ automatically. We copy them to the bot
@@ -101,6 +101,32 @@ function ensureLarkCliConfig(appId: string, appSecret: string, logger: Logger): 
   } catch (err: any) {
     logger.warn({ err: err.message }, 'Failed to configure lark-cli — you can run manually: lark-cli config init');
   }
+}
+
+/**
+ * Install a skill from the Skill Hub into a bot's working directory.
+ * Writes SKILL.md and optionally extracts references/ from a tar buffer.
+ */
+export function installSkillFromHub(
+  workDir: string,
+  skillName: string,
+  skillMd: string,
+  referencesTar: Buffer | undefined,
+  logger: Logger,
+): void {
+  const destDir = path.join(workDir, '.claude', 'skills', skillName);
+  fs.mkdirSync(destDir, { recursive: true });
+  fs.writeFileSync(path.join(destDir, 'SKILL.md'), skillMd, 'utf-8');
+
+  if (referencesTar && referencesTar.length > 0) {
+    try {
+      execSync(`tar xf - -C "${destDir}"`, { input: referencesTar, stdio: ['pipe', 'pipe', 'pipe'], timeout: 30_000 });
+    } catch (err: any) {
+      logger.warn({ err: err.message, skillName }, 'Failed to extract references tar');
+    }
+  }
+
+  logger.info({ skillName, dest: destDir }, 'Skill installed from Hub');
 }
 
 /** Locate the lark-cli executable. */

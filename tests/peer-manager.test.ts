@@ -147,20 +147,15 @@ describe('PeerManager', () => {
   });
 
   it('findBotOnPeer returns bot from specific peer', async () => {
-    const fetchMock = vi.fn();
-    // First peer: alice
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({
-        bots: [{ name: 'bot-a', platform: 'feishu', workingDirectory: '/a' }],
-      }),
-    });
-    // Second peer: bob
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({
-        bots: [{ name: 'bot-b', platform: 'telegram', workingDirectory: '/b' }],
-      }),
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('9200/api/bots')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ bots: [{ name: 'bot-a', platform: 'feishu', workingDirectory: '/a' }] }) });
+      }
+      if (url.includes('9300/api/bots')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ bots: [{ name: 'bot-b', platform: 'telegram', workingDirectory: '/b' }] }) });
+      }
+      // skills endpoints
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ skills: [] }) });
     });
 
     vi.stubGlobal('fetch', fetchMock);
@@ -223,7 +218,7 @@ describe('PeerManager', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       'http://remote:9100/api/bots',
       expect.objectContaining({
-        headers: { 'Authorization': 'Bearer my-secret' },
+        headers: expect.objectContaining({ 'Authorization': 'Bearer my-secret', 'X-MetaBot-Origin': 'peer' }),
       }),
     );
   });
@@ -244,7 +239,7 @@ describe('PeerManager', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:9200/api/bots',
       expect.objectContaining({
-        headers: {},
+        headers: expect.objectContaining({ 'X-MetaBot-Origin': 'peer' }),
       }),
     );
   });

@@ -61,6 +61,8 @@ export interface CardState {
   resultSummary?: string;
   /** Custom card header title override (e.g. "Turn 1", "📊 Result") */
   cardTitle?: string;
+  /** Cumulative session cost (USD), accumulated across queries until /reset */
+  sessionCostUsd?: number;
 }
 
 export interface IncomingMessage {
