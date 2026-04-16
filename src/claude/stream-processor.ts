@@ -4,17 +4,15 @@ import type { CardState, ToolCall, PendingQuestion, SubagentTask } from '../feis
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.tiff']);
 
 /**
- * Tools that require user interaction in the Agent SDK.
- * These tools cause the SDK stream to pause waiting for a tool_result.
- * The bridge must detect them and respond (either by asking the user
- * or auto-responding) to prevent the stream from hanging.
+ * Tools that the Agent SDK auto-responds to in bypassPermissions mode
+ * (the SDK already emits a tool_result, so the bridge must NOT send one
+ * or Anthropic returns a duplicate tool_result error). We still detect
+ * them here so the bridge can run side effects — e.g. surfacing plan
+ * content as a separate chat message before the SDK continues.
  */
-// ExitPlanMode and EnterPlanMode are handled automatically by the SDK
-// in bypassPermissions mode. Do NOT auto-respond to them from the bridge,
-// as the SDK already sends a tool_result, causing duplicate tool_result errors.
-const AUTO_RESPOND_TOOLS = new Set<string>();
+const SDK_HANDLED_TOOLS = new Set<string>(['ExitPlanMode', 'EnterPlanMode']);
 
-export interface AutoRespondTool {
+export interface DetectedTool {
   toolUseId: string;
   name: string;
 }
@@ -46,7 +44,7 @@ export class StreamProcessor {
   private numTurns: number | undefined;
   private _imagePaths: Set<string> = new Set();
   private _pendingQuestions: PendingQuestion[] = [];
-  private _autoRespondTools: AutoRespondTool[] = [];
+  private _sdkHandledTools: DetectedTool[] = [];
   private _planFilePath: string | null = null;
   private _config: StreamProcessorConfig;
   private _model: string | undefined;
@@ -180,8 +178,8 @@ export class StreamProcessor {
         this.addToolCall(block.name, block.input);
         if (block.name === 'AskUserQuestion' && block.id && block.input) {
           this.extractPendingQuestion(block.id, block.input);
-        } else if (AUTO_RESPOND_TOOLS.has(block.name) && block.id) {
-          this._autoRespondTools.push({ toolUseId: block.id, name: block.name });
+        } else if (SDK_HANDLED_TOOLS.has(block.name) && block.id) {
+          this._sdkHandledTools.push({ toolUseId: block.id, name: block.name });
         }
       } else if (block.type === 'tool_result') {
         const output = extractToolOutput(block.content);
@@ -503,14 +501,15 @@ export class StreamProcessor {
   }
 
   /**
-   * Get and clear any tools that need auto-response (e.g. ExitPlanMode).
-   * These tools cause the SDK stream to pause; we must push a tool_result
-   * to unblock them.
+   * Get and clear any tools the SDK handles itself (e.g. ExitPlanMode,
+   * EnterPlanMode). The bridge uses the returned list to run side effects
+   * such as sending the plan content as a separate message — it must NOT
+   * push its own tool_result, since the SDK already did.
    */
-  drainAutoRespondTools(): AutoRespondTool[] {
-    if (this._autoRespondTools.length === 0) return [];
-    const tools = [...this._autoRespondTools];
-    this._autoRespondTools = [];
+  drainSdkHandledTools(): DetectedTool[] {
+    if (this._sdkHandledTools.length === 0) return [];
+    const tools = [...this._sdkHandledTools];
+    this._sdkHandledTools = [];
     return tools;
   }
 

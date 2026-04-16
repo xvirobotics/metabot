@@ -10,7 +10,10 @@ export class MessageSender {
 
   /**
    * Retry a Feishu API call on transient gateway errors (502, 503).
-   * Retries up to 2 times with 1s / 2s delay.
+   * Retries up to 2 times with 1s / 2s delay. Only use for idempotent
+   * operations (e.g. PATCH updates) — do NOT use for message.create,
+   * which would risk duplicate user-visible messages if the first
+   * request reached Feishu but the response was lost.
    */
   private async withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
     const maxRetries = 2;
@@ -31,17 +34,17 @@ export class MessageSender {
   }
 
   async sendCard(chatId: string, cardContent: string): Promise<string | undefined> {
+    // Not retried: message.create is not idempotent — a retry after a lost
+    // 502 response could create duplicate cards in the chat.
     try {
-      const resp = await this.withRetry('sendCard', () =>
-        this.client.im.v1.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: chatId,
-            content: cardContent,
-            msg_type: 'interactive',
-          },
-        }),
-      );
+      const resp = await this.client.im.v1.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: {
+          receive_id: chatId,
+          content: cardContent,
+          msg_type: 'interactive',
+        },
+      });
 
       const messageId = resp?.data?.message_id;
       if (!messageId) {
@@ -55,6 +58,7 @@ export class MessageSender {
   }
 
   async updateCard(messageId: string, cardContent: string): Promise<void> {
+    // Safe to retry: message.patch on a fixed message_id is idempotent.
     try {
       await this.withRetry('updateCard', () =>
         this.client.im.v1.message.patch({
@@ -205,17 +209,16 @@ export class MessageSender {
   }
 
   async sendText(chatId: string, text: string): Promise<void> {
+    // Not retried: message.create is not idempotent — see sendCard().
     try {
-      await this.withRetry('sendText', () =>
-        this.client.im.v1.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: chatId,
-            content: JSON.stringify({ text }),
-            msg_type: 'text',
-          },
-        }),
-      );
+      await this.client.im.v1.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: {
+          receive_id: chatId,
+          content: JSON.stringify({ text }),
+          msg_type: 'text',
+        },
+      });
     } catch (err) {
       this.logger.error({ err, chatId }, 'Failed to send text');
     }

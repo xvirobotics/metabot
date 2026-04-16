@@ -804,19 +804,16 @@ export class MessageBridge {
               continue;
             }
 
-            // Auto-respond to interactive tools that don't need user input (ExitPlanMode, etc.)
-            const autoTools = processor.drainAutoRespondTools();
-            for (const tool of autoTools) {
-              const sid = processor.getSessionId() || '';
-              const response = getAutoResponse(tool.name);
-              this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'Auto-responding to interactive tool');
-
-              // ExitPlanMode: send plan content to user before auto-responding
+            // SDK-handled tools (ExitPlanMode, EnterPlanMode): the SDK already
+            // emits the tool_result in bypassPermissions mode, so we only run
+            // side effects here — pushing our own tool_result would cause a
+            // duplicate tool_result error.
+            const sdkHandledTools = processor.drainSdkHandledTools();
+            for (const tool of sdkHandledTools) {
+              this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'SDK-handled tool detected, running side effects');
               if (tool.name === 'ExitPlanMode') {
                 await this.sendPlanContent(chatId, processor, state);
               }
-
-              executionHandle.sendAnswer(tool.toolUseId, sid, response);
             }
 
             // If we just got a message after answering a question, clear timeout state
@@ -1297,18 +1294,14 @@ export class MessageBridge {
               continue;
             }
 
-            // Auto-respond to interactive tools (ExitPlanMode, etc.)
-            const autoTools = processor.drainAutoRespondTools();
-            for (const tool of autoTools) {
-              const sid = processor.getSessionId() || '';
-              const response = getAutoResponse(tool.name);
-              this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'API task: auto-responding to interactive tool');
-
+            // SDK-handled tools (ExitPlanMode, EnterPlanMode): side-effects only
+            // — the SDK already emits the tool_result in bypassPermissions mode.
+            const sdkHandledTools = processor.drainSdkHandledTools();
+            for (const tool of sdkHandledTools) {
+              this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'API task: SDK-handled tool detected, running side effects');
               if (tool.name === 'ExitPlanMode' && sendCards) {
                 await this.sendPlanContent(chatId, processor, state);
               }
-
-              executionHandle.sendAnswer(tool.toolUseId, sid, response);
             }
 
             if (state.status === 'complete') {
@@ -1907,17 +1900,3 @@ export function isStaleSessionError(errorMessage?: string): boolean {
   return /no conversation found|conversation not found|session id|invalid session|each tool_use must have a single result|multiple tool_result blocks/i.test(errorMessage);
 }
 
-/**
- * Generate auto-response content for interactive tools that the bridge
- * handles without user input (plan mode, etc.).
- */
-function getAutoResponse(toolName: string): string {
-  switch (toolName) {
-    case 'ExitPlanMode':
-      return 'User approved the plan. Proceed with implementation.';
-    case 'EnterPlanMode':
-      return 'Plan mode approved. Explore the codebase and design your approach.';
-    default:
-      return 'Approved. Please continue.';
-  }
-}

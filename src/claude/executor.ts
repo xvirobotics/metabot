@@ -335,21 +335,40 @@ export class ClaudeExecutor {
 
       const answers = await new Promise<Record<string, string>>((resolve) => {
         const id = input.tool_use_id;
-        pendingQuestionResolvers.set(id, resolve);
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+
+        // Centralized cleanup so every exit path — normal resolve, timeout,
+        // or abort — clears the timer, the abort listener, and the map entry.
+        // Without this, a successful resolveQuestion() would leave a 6-minute
+        // timer and a live abort listener that could fire after resolution.
+        const cleanup = () => {
+          if (timeout !== undefined) {
+            clearTimeout(timeout);
+            timeout = undefined;
+          }
+          signal.removeEventListener('abort', onAbort);
+          pendingQuestionResolvers.delete(id);
+        };
+
+        const onAbort = () => {
+          cleanup();
+          resolve({});
+        };
+
+        pendingQuestionResolvers.set(id, (ans) => {
+          cleanup();
+          resolve(ans);
+        });
 
         // Safety timeout: auto-resolve with empty answers after 6 minutes
-        // to prevent indefinite hang if bridge fails to deliver answer
-        const timeout = setTimeout(() => {
-          if (pendingQuestionResolvers.delete(id)) {
+        // to prevent indefinite hang if the bridge fails to deliver an answer.
+        timeout = setTimeout(() => {
+          if (pendingQuestionResolvers.has(id)) {
+            cleanup();
             resolve({});
           }
         }, 6 * 60 * 1000);
 
-        const onAbort = () => {
-          clearTimeout(timeout);
-          pendingQuestionResolvers.delete(id);
-          resolve({});
-        };
         signal.addEventListener('abort', onAbort, { once: true });
       });
 
@@ -412,52 +431,50 @@ export class ClaudeExecutor {
 
     const answeredToolUseIds = new Set<string>();
 
+    const sendAnswerImpl = (toolUseId: string, sid: string, answerText: string) => {
+      if (answeredToolUseIds.has(toolUseId)) {
+        logger.warn({ toolUseId }, 'Duplicate tool_result suppressed');
+        return;
+      }
+      answeredToolUseIds.add(toolUseId);
+      logger.info({ toolUseId }, 'Sending answer to Claude');
+      const answerMessage: SDKUserMessage = {
+        type: 'user',
+        message: {
+          role: 'user' as const,
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: toolUseId,
+              content: answerText,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        session_id: sid,
+      };
+      inputQueue.enqueue(answerMessage);
+    };
+
     return {
       stream: wrapStream(),
-      sendAnswer: (toolUseId: string, sid: string, answerText: string) => {
-        if (answeredToolUseIds.has(toolUseId)) {
-          logger.warn({ toolUseId }, 'Duplicate tool_result suppressed');
-          return;
-        }
-        answeredToolUseIds.add(toolUseId);
-        logger.info({ toolUseId }, 'Sending answer to Claude');
-        const answerMessage: SDKUserMessage = {
-          type: 'user',
-          message: {
-            role: 'user' as const,
-            content: [
-              {
-                type: 'tool_result',
-                tool_use_id: toolUseId,
-                content: answerText,
-              },
-            ],
-          },
-          parent_tool_use_id: null,
-          session_id: sid,
-        };
-        inputQueue.enqueue(answerMessage);
-      },
+      sendAnswer: sendAnswerImpl,
       resolveQuestion: (toolUseId: string, answers: Record<string, string>) => {
         const resolver = pendingQuestionResolvers.get(toolUseId);
         if (resolver) {
+          // The wrapped resolver already deletes the map entry; extra
+          // delete() here is redundant but harmless and keeps the intent
+          // explicit.
           pendingQuestionResolvers.delete(toolUseId);
           logger.info({ toolUseId, answerCount: Object.keys(answers).length }, 'Resolving AskUserQuestion hook');
           resolver(answers);
         } else {
-          // Fallback: send as tool_result via inputQueue (e.g. if hook was not used)
+          // Fallback: hook already timed out/aborted, or was never registered.
+          // Route through sendAnswerImpl so we share the duplicate-suppression
+          // guard (answeredToolUseIds) — otherwise a later sendAnswer() for
+          // the same toolUseId could produce a duplicate tool_result.
           logger.warn({ toolUseId }, 'No pending hook resolver, falling back to sendAnswer');
-          const sid = '';
-          const answerMessage: SDKUserMessage = {
-            type: 'user',
-            message: {
-              role: 'user' as const,
-              content: [{ type: 'tool_result', tool_use_id: toolUseId, content: JSON.stringify({ answers }) }],
-            },
-            parent_tool_use_id: null,
-            session_id: sid,
-          };
-          inputQueue.enqueue(answerMessage);
+          sendAnswerImpl(toolUseId, '', JSON.stringify({ answers }));
         }
       },
       finish: () => {
