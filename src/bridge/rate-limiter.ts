@@ -1,11 +1,12 @@
 export class RateLimiter {
-  private pending: (() => void | Promise<void>) | null = null;
+  private pending: (() => unknown | Promise<unknown>) | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastSent = 0;
 
   constructor(private intervalMs: number = 1500) {}
 
-  schedule(fn: () => void | Promise<void>): void {
+  // Accepts any thunk; return value is discarded (fire-and-forget throttle).
+  schedule(fn: () => unknown | Promise<unknown>): void {
     const now = Date.now();
     const elapsed = now - this.lastSent;
 

@@ -191,6 +191,8 @@ export type SDKMessage = {
 export interface ExecutionHandle {
   stream: AsyncGenerator<SDKMessage>;
   sendAnswer(toolUseId: string, sessionId: string, answerText: string): void;
+  /** Resolve a pending AskUserQuestion hook with the user's answers. */
+  resolveQuestion(toolUseId: string, answers: Record<string, string>): void;
   finish(): void;
 }
 
@@ -319,6 +321,99 @@ export class ClaudeExecutor {
       queryOptions.allowedTools = options.allowedTools;
     }
 
+    // AskUserQuestion hook: intercept the SDK's internal permission check
+    // which denies AskUserQuestion in bypassPermissions mode. The hook pauses
+    // until the bridge collects user answers, then returns them as updatedInput.
+    const pendingQuestionResolvers = new Map<string, (answers: Record<string, string>) => void>();
+    // Race fix: resolveQuestion may be called before the hook registers
+    // (notably for API-task auto-answer, where answers are computed synchronously
+    // as soon as we see the tool_use in the stream, but the hook doesn't run
+    // until the SDK starts its permission check afterwards). We stash such
+    // early answers here so the hook can pick them up on registration.
+    const preResolvedAnswers = new Map<string, { answers: Record<string, string>; timer: ReturnType<typeof setTimeout> }>();
+
+    const askUserQuestionHook = async (
+      input: { hook_event_name: string; tool_name: string; tool_input: unknown; tool_use_id: string },
+      _toolUseId: string | undefined,
+      { signal }: { signal: AbortSignal },
+    ): Promise<Record<string, unknown>> => {
+      const toolInput = input.tool_input as Record<string, unknown>;
+
+      const answers = await new Promise<Record<string, string>>((resolve) => {
+        const id = input.tool_use_id;
+
+        // If resolveQuestion fired before this hook registered, drain the
+        // pre-stashed answers immediately instead of waiting on a resolver
+        // that will never arrive.
+        const early = preResolvedAnswers.get(id);
+        if (early) {
+          clearTimeout(early.timer);
+          preResolvedAnswers.delete(id);
+          // Mark as answered so any further resolveQuestion/sendAnswer for
+          // this toolUseId is ignored as a duplicate (prevents the 6-min
+          // pre-stash leak from re-appearing after drain).
+          answeredToolUseIds.add(id);
+          resolve(early.answers);
+          return;
+        }
+
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+
+        // Centralized cleanup so every exit path — normal resolve, timeout,
+        // or abort — clears the timer, the abort listener, and the map entry.
+        // Without this, a successful resolveQuestion() would leave a 6-minute
+        // timer and a live abort listener that could fire after resolution.
+        // Also records the id in `answeredToolUseIds` so any later duplicate
+        // resolveQuestion/sendAnswer is suppressed instead of creating a
+        // fresh pre-stash timer or emitting a second tool_result.
+        const cleanup = () => {
+          if (timeout !== undefined) {
+            clearTimeout(timeout);
+            timeout = undefined;
+          }
+          signal.removeEventListener('abort', onAbort);
+          pendingQuestionResolvers.delete(id);
+          answeredToolUseIds.add(id);
+        };
+
+        const onAbort = () => {
+          cleanup();
+          resolve({});
+        };
+
+        pendingQuestionResolvers.set(id, (ans) => {
+          cleanup();
+          resolve(ans);
+        });
+
+        // Safety timeout: auto-resolve with empty answers after 6 minutes
+        // to prevent indefinite hang if the bridge fails to deliver an answer.
+        timeout = setTimeout(() => {
+          if (pendingQuestionResolvers.has(id)) {
+            cleanup();
+            resolve({});
+          }
+        }, 6 * 60 * 1000);
+
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          updatedInput: { ...toolInput, answers },
+        },
+      };
+    };
+
+    queryOptions.hooks = {
+      PreToolUse: [{
+        matcher: 'AskUserQuestion',
+        hooks: [askUserQuestionHook as any],
+      }],
+    };
+
     const stream = query({
       prompt: inputQueue,
       options: queryOptions as any,
@@ -362,31 +457,77 @@ export class ClaudeExecutor {
 
     const answeredToolUseIds = new Set<string>();
 
+    const sendAnswerImpl = (toolUseId: string, sid: string, answerText: string) => {
+      if (answeredToolUseIds.has(toolUseId)) {
+        logger.warn({ toolUseId }, 'Duplicate tool_result suppressed');
+        return;
+      }
+      answeredToolUseIds.add(toolUseId);
+      logger.info({ toolUseId }, 'Sending answer to Claude');
+      const answerMessage: SDKUserMessage = {
+        type: 'user',
+        message: {
+          role: 'user' as const,
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: toolUseId,
+              content: answerText,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        session_id: sid,
+      };
+      inputQueue.enqueue(answerMessage);
+    };
+
     return {
       stream: wrapStream(),
-      sendAnswer: (toolUseId: string, sid: string, answerText: string) => {
+      sendAnswer: sendAnswerImpl,
+      resolveQuestion: (toolUseId: string, answers: Record<string, string>) => {
+        // Durable duplicate guard: once any path (live resolver, hook
+        // timeout/abort, pre-stash drain) has produced an answer for this
+        // toolUseId, further resolveQuestion calls are no-ops. Without
+        // this, a late duplicate after the hook already resolved would
+        // create a fresh 6-minute pre-stash timer and leak state.
         if (answeredToolUseIds.has(toolUseId)) {
-          logger.warn({ toolUseId }, 'Duplicate tool_result suppressed');
+          logger.warn({ toolUseId }, 'Duplicate resolveQuestion for already-answered tool, ignoring');
           return;
         }
-        answeredToolUseIds.add(toolUseId);
-        logger.info({ toolUseId }, 'Sending answer to Claude');
-        const answerMessage: SDKUserMessage = {
-          type: 'user',
-          message: {
-            role: 'user' as const,
-            content: [
-              {
-                type: 'tool_result',
-                tool_use_id: toolUseId,
-                content: answerText,
-              },
-            ],
-          },
-          parent_tool_use_id: null,
-          session_id: sid,
-        };
-        inputQueue.enqueue(answerMessage);
+
+        const resolver = pendingQuestionResolvers.get(toolUseId);
+        if (resolver) {
+          // The wrapped resolver's cleanup() deletes the map entry and
+          // marks answeredToolUseIds; extra delete() here is redundant
+          // but harmless and keeps the intent explicit.
+          pendingQuestionResolvers.delete(toolUseId);
+          logger.info({ toolUseId, answerCount: Object.keys(answers).length }, 'Resolving AskUserQuestion hook');
+          resolver(answers);
+          return;
+        }
+
+        // Race: hook hasn't registered yet. This happens when the bridge
+        // computes answers synchronously from the streamed tool_use (e.g.
+        // API-task auto-answer) and calls resolveQuestion before the SDK
+        // invokes the PreToolUse hook. Stash answers so the hook picks
+        // them up the moment it runs, instead of bypassing the hook with
+        // a manual tool_result (which is error-prone and was missing the
+        // 6-min leak fix).
+        if (preResolvedAnswers.has(toolUseId)) {
+          logger.warn({ toolUseId }, 'Duplicate resolveQuestion for pre-stashed answers, ignoring');
+          return;
+        }
+        logger.info({ toolUseId, answerCount: Object.keys(answers).length }, 'Pre-stashing answers — hook has not registered yet');
+        // Expire stashed answers after the same 6-minute window as the
+        // hook's own safety timeout, so a stash without a matching hook
+        // invocation doesn't leak forever.
+        const timer = setTimeout(() => {
+          if (preResolvedAnswers.delete(toolUseId)) {
+            logger.warn({ toolUseId }, 'Pre-stashed answers expired (hook never registered)');
+          }
+        }, 6 * 60 * 1000);
+        preResolvedAnswers.set(toolUseId, { answers, timer });
       },
       finish: () => {
         inputQueue.finish();

@@ -210,7 +210,7 @@ describe('StreamProcessor', () => {
     expect(p.getImagePaths()).toEqual([]);
   });
 
-  it('does not auto-respond to ExitPlanMode (SDK handles it in bypassPermissions mode)', () => {
+  it('detects ExitPlanMode for side-effects (SDK still emits the tool_result)', () => {
     const p = new StreamProcessor('hi');
     p.processMessage(msg({
       type: 'assistant',
@@ -224,8 +224,11 @@ describe('StreamProcessor', () => {
         }],
       },
     }));
-    const tools = p.drainAutoRespondTools();
-    expect(tools).toHaveLength(0);
+    const tools = p.drainSdkHandledTools();
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toEqual({ toolUseId: 'tool-plan1', name: 'ExitPlanMode' });
+    // Draining clears the buffer
+    expect(p.drainSdkHandledTools()).toHaveLength(0);
   });
 
   it('does not detect ExitPlanMode from subagent', () => {
@@ -242,7 +245,44 @@ describe('StreamProcessor', () => {
         }],
       },
     }));
-    expect(p.drainAutoRespondTools()).toHaveLength(0);
+    expect(p.drainSdkHandledTools()).toHaveLength(0);
+  });
+
+  it('detects EnterPlanMode for side-effects', () => {
+    const p = new StreamProcessor('hi');
+    p.processMessage(msg({
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'tool-enter1',
+          name: 'EnterPlanMode',
+          input: {},
+        }],
+      },
+    }));
+    const tools = p.drainSdkHandledTools();
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toEqual({ toolUseId: 'tool-enter1', name: 'EnterPlanMode' });
+  });
+
+  it('queues multiple SDK-handled tools and drains them together', () => {
+    const p = new StreamProcessor('hi');
+    p.processMessage(msg({
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: {
+        content: [
+          { type: 'tool_use', id: 'tool-enter2', name: 'EnterPlanMode', input: {} },
+          { type: 'tool_use', id: 'tool-exit2', name: 'ExitPlanMode', input: {} },
+        ],
+      },
+    }));
+    const tools = p.drainSdkHandledTools();
+    expect(tools).toHaveLength(2);
+    expect(tools.map(t => t.name)).toEqual(['EnterPlanMode', 'ExitPlanMode']);
+    expect(p.drainSdkHandledTools()).toHaveLength(0);
   });
 
   it('marks all tools as done on result', () => {

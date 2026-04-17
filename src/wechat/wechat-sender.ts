@@ -39,31 +39,47 @@ export class WechatSender implements IMessageSender {
     return messageId;
   }
 
-  async updateCard(messageId: string, state: CardState): Promise<void> {
+  async updateCard(messageId: string, state: CardState): Promise<boolean> {
     const { chatId } = this.parseMessageId(messageId);
-    if (!chatId) return;
+    if (!chatId) return false;
 
     // Terminal states: send final result as standalone FINISH message
     if (state.status === 'complete' || state.status === 'error') {
-      if (this.finalSentSet.has(messageId)) return; // idempotency
-      this.finalSentSet.add(messageId);
-      this.lastProgressSent.delete(messageId);
-      this.reportedToolCount.delete(messageId);
-      setTimeout(() => this.finalSentSet.delete(messageId), 120_000);
+      if (this.finalSentSet.has(messageId)) return true; // idempotent — treat as delivered
 
+      // Send FIRST, mark final-sent ONLY on success. Otherwise a transient
+      // transport failure would be latched as "delivered" and later retries
+      // would short-circuit via finalSentSet, defeating the bridge's
+      // plain-text fallback and freeze-retry logic.
       const text = this.renderFinalMessage(state);
-      // Use sendText for automatic chunking of long responses
-      await this.sendText(chatId, text);
-      return;
+      let ok = false;
+      try {
+        const chunks = splitLongText(text, MAX_TEXT_LENGTH);
+        for (const chunk of chunks) {
+          await this.client.sendTextMessage(chatId, chunk);
+        }
+        ok = true;
+      } catch (err) {
+        this.logger.error({ err, chatId }, 'Failed to send WeChat final message');
+      }
+
+      if (ok) {
+        this.finalSentSet.add(messageId);
+        this.lastProgressSent.delete(messageId);
+        this.reportedToolCount.delete(messageId);
+        setTimeout(() => this.finalSentSet.delete(messageId), 120_000);
+      }
+      return ok;
     }
 
     // Waiting for input: send question as standalone message
     if (state.status === 'waiting_for_input' && state.pendingQuestion) {
       const text = this.renderQuestionMessage(state);
-      await this.client.sendTextMessage(chatId, text).catch((err) => {
+      const ok = await this.client.sendTextMessage(chatId, text).then(() => true).catch((err) => {
         this.logger.error({ err, chatId }, 'Failed to send WeChat question');
+        return false;
       });
-      return;
+      return ok;
     }
 
     // Intermediate: send tool progress as actual messages (throttled)
@@ -79,10 +95,14 @@ export class WechatSender implements IMessageSender {
       this.reportedToolCount.set(messageId, state.toolCalls.length);
 
       const text = this.renderProgressMessage(newTools, state.status);
-      await this.client.sendTextMessage(chatId, text).catch((err) => {
+      const ok = await this.client.sendTextMessage(chatId, text).then(() => true).catch((err) => {
         this.logger.debug({ err, chatId }, 'Failed to send WeChat progress (may lack context_token)');
+        return false;
       });
+      return ok;
     }
+    // Throttled/no-op case: nothing to send this round, not a failure.
+    return true;
   }
 
   async sendTextNotice(chatId: string, title: string, content: string): Promise<void> {

@@ -30,7 +30,7 @@ function mockSender() {
   let cardCounter = 0;
   const sender: IMessageSender = {
     sendCard: vi.fn(async () => `card_${++cardCounter}`),
-    updateCard: vi.fn(async () => {}),
+    updateCard: vi.fn(async () => true),
     sendTextNotice: vi.fn(async () => {}),
     sendText: vi.fn(async () => {}),
     sendImageFile: vi.fn(async () => true),
@@ -129,8 +129,8 @@ describe('recreateCard — turn content in frozen card', () => {
     expect(sender.updateCard).toHaveBeenCalledTimes(2);
     expect(sender.sendCard).toHaveBeenCalledTimes(1);
 
-    // Background retry fires at 3s
-    (sender.updateCard as any).mockResolvedValueOnce(undefined);
+    // Background retry fires at 3s (updateCard now returns true on success)
+    (sender.updateCard as any).mockResolvedValueOnce(true);
     await vi.advanceTimersByTimeAsync(3000);
 
     // 2 sync + 1 background = 3 total
@@ -239,5 +239,62 @@ describe('sendFinalCard — multi-turn vs single-turn', () => {
       'All done.',
       'blue',
     );
+  });
+});
+
+describe('sendFinalCard — transport failure fallback', () => {
+  it('multi-turn: falls back to plain text when all sendCard retries return undefined', async () => {
+    vi.useFakeTimers();
+    const sender = mockSender();
+    // sendCard always returns undefined — simulates Feishu transport failure
+    (sender.sendCard as any).mockResolvedValue(undefined);
+    const bridge = makeBridge(sender);
+
+    const state: CardState = {
+      status: 'complete',
+      userPrompt: 'test',
+      responseText: '',
+      toolCalls: [],
+      resultSummary: 'Task done.',
+    };
+
+    const promise = (bridge as any).sendFinalCard('old_card', state, 'chat1', 'last turn content', 2);
+    // Advance through all retry backoffs (2s + 4s + 8s per iteration, plus base delays)
+    await vi.advanceTimersByTimeAsync(60_000);
+    await promise;
+
+    // sendText fallback MUST fire so user sees something even when cards fail
+    expect(sender.sendText).toHaveBeenCalledWith(
+      'chat1',
+      expect.stringContaining('Task done.'),
+    );
+    vi.useRealTimers();
+  });
+
+  it('single-turn: falls back to plain text when all updateCard retries return false', async () => {
+    vi.useFakeTimers();
+    const sender = mockSender();
+    // updateCard returns false (transport failure, no throw)
+    (sender.updateCard as any).mockResolvedValue(false);
+    const bridge = makeBridge(sender);
+
+    const state: CardState = {
+      status: 'complete',
+      userPrompt: 'test',
+      responseText: 'short response',
+      toolCalls: [],
+    };
+
+    const promise = (bridge as any).sendFinalCard('card1', state, 'chat1', undefined, 0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await promise;
+
+    // Without the boolean-check fix, this fallback would never fire on silent
+    // transport failures — regression guard for C1.
+    expect(sender.sendText).toHaveBeenCalledWith(
+      'chat1',
+      expect.stringContaining('short response'),
+    );
+    vi.useRealTimers();
   });
 });

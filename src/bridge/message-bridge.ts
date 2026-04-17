@@ -402,8 +402,8 @@ export class MessageBridge {
       return;
     }
 
-    // All questions in this call answered — send combined result
-    const answerJson = JSON.stringify({ answers: task.collectedAnswers });
+    // All questions in this call answered — resolve the PreToolUse hook
+    const collectedAnswers = { ...task.collectedAnswers };
 
     if (task.questionTimeoutId) {
       clearTimeout(task.questionTimeoutId);
@@ -415,10 +415,9 @@ export class MessageBridge {
     task.processor.clearPendingQuestion();
     task.consecutiveAutoAnswers = 0; // user responded — reset loop counter
 
-    const sessionId = task.processor.getSessionId() || '';
-    task.executionHandle.sendAnswer(pending.toolUseId, sessionId, answerJson);
+    task.executionHandle.resolveQuestion(pending.toolUseId, collectedAnswers);
 
-    this.logger.info({ chatId, answers: task.collectedAnswers, toolUseId: pending.toolUseId }, 'Sent all answers to Claude');
+    this.logger.info({ chatId, answers: collectedAnswers, toolUseId: pending.toolUseId }, 'Sent all answers to Claude');
 
     // Check if there are more queued AskUserQuestion calls
     const nextPending = task.processor.getPendingQuestion();
@@ -449,9 +448,11 @@ export class MessageBridge {
       return;
     }
 
-    // No more questions — resume normal execution
-    const answerSummary = Object.values(task.collectedAnswers).length > 0
-      ? Object.values(task.collectedAnswers).join(', ')
+    // No more questions — resume normal execution.
+    // Use the `collectedAnswers` snapshot captured above, NOT task.collectedAnswers
+    // (which was reset to {} just before resolveQuestion for the next question cycle).
+    const answerSummary = Object.values(collectedAnswers).length > 0
+      ? Object.values(collectedAnswers).join(', ')
       : answerText;
     const currentState = task.processor.getCurrentState();
     await this.sender.updateCard(task.cardMessageId, {
@@ -478,14 +479,13 @@ export class MessageBridge {
       }
     }
 
-    const answerJson = JSON.stringify({ answers: task.collectedAnswers });
+    const collectedAnswers = { ...task.collectedAnswers };
     task.pendingQuestion = null;
     task.currentQuestionIndex = 0;
     task.collectedAnswers = {};
     task.processor.clearPendingQuestion();
 
-    const sid = task.processor.getSessionId() || '';
-    task.executionHandle.sendAnswer(pending.toolUseId, sid, answerJson);
+    task.executionHandle.resolveQuestion(pending.toolUseId, collectedAnswers);
   }
 
   /** Check if message is a media message with default (auto-generated) text. */
@@ -806,19 +806,16 @@ export class MessageBridge {
               continue;
             }
 
-            // Auto-respond to interactive tools that don't need user input (ExitPlanMode, etc.)
-            const autoTools = processor.drainAutoRespondTools();
-            for (const tool of autoTools) {
-              const sid = processor.getSessionId() || '';
-              const response = getAutoResponse(tool.name);
-              this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'Auto-responding to interactive tool');
-
-              // ExitPlanMode: send plan content to user before auto-responding
+            // SDK-handled tools (ExitPlanMode, EnterPlanMode): the SDK already
+            // emits the tool_result in bypassPermissions mode, so we only run
+            // side effects here — pushing our own tool_result would cause a
+            // duplicate tool_result error.
+            const sdkHandledTools = processor.drainSdkHandledTools();
+            for (const tool of sdkHandledTools) {
+              this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'SDK-handled tool detected, running side effects');
               if (tool.name === 'ExitPlanMode') {
                 await this.sendPlanContent(chatId, processor, state);
               }
-
-              executionHandle.sendAnswer(tool.toolUseId, sid, response);
             }
 
             // If we just got a message after answering a question, clear timeout state
@@ -1284,30 +1281,29 @@ export class MessageBridge {
                 // Wait for the caller to provide an answer
                 const answerJson = await options.onQuestion(pending);
                 processor.clearPendingQuestion();
-                const sid = processor.getSessionId() || '';
-                executionHandle.sendAnswer(pending.toolUseId, sid, answerJson);
+                // Parse answers from JSON and resolve the hook
+                try {
+                  const parsed = JSON.parse(answerJson);
+                  executionHandle.resolveQuestion(pending.toolUseId, parsed.answers || {});
+                } catch {
+                  executionHandle.resolveQuestion(pending.toolUseId, { _answer: answerJson });
+                }
               } else {
                 // Auto-answer when no onQuestion handler is provided
                 processor.clearPendingQuestion();
-                const sid = processor.getSessionId() || '';
-                const autoAnswer = JSON.stringify({ answers: { _auto: 'Please decide on your own and proceed.' } });
-                executionHandle.sendAnswer(pending.toolUseId, sid, autoAnswer);
+                executionHandle.resolveQuestion(pending.toolUseId, { _auto: 'Please decide on your own and proceed.' });
               }
               continue;
             }
 
-            // Auto-respond to interactive tools (ExitPlanMode, etc.)
-            const autoTools = processor.drainAutoRespondTools();
-            for (const tool of autoTools) {
-              const sid = processor.getSessionId() || '';
-              const response = getAutoResponse(tool.name);
-              this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'API task: auto-responding to interactive tool');
-
+            // SDK-handled tools (ExitPlanMode, EnterPlanMode): side-effects only
+            // — the SDK already emits the tool_result in bypassPermissions mode.
+            const sdkHandledTools = processor.drainSdkHandledTools();
+            for (const tool of sdkHandledTools) {
+              this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'API task: SDK-handled tool detected, running side effects');
               if (tool.name === 'ExitPlanMode' && sendCards) {
                 await this.sendPlanContent(chatId, processor, state);
               }
-
-              executionHandle.sendAnswer(tool.toolUseId, sid, response);
             }
 
             if (state.status === 'complete') {
@@ -1630,15 +1626,16 @@ export class MessageBridge {
         cardTitle: `Turn ${turnCount}`,
       };
       let frozen = false;
+      // updateCard is no-throw + boolean on transport failure; defensive catch
+      // guards against unexpected throws (e.g. test mocks).
       try {
-        await this.sender.updateCard(messageId, freezeState);
-        frozen = true;
-      } catch {
+        frozen = await this.sender.updateCard(messageId, freezeState);
+      } catch { /* fall through to retry */ }
+      if (!frozen) {
         await new Promise((r) => setTimeout(r, 1000));
         try {
-          await this.sender.updateCard(messageId, freezeState);
-          frozen = true;
-        } catch { /* will retry in background */ }
+          frozen = await this.sender.updateCard(messageId, freezeState);
+        } catch { /* fall through to background retry */ }
       }
       if (!frozen) {
         this.backgroundFreezeRetry(messageId, freezeState);
@@ -1650,33 +1647,43 @@ export class MessageBridge {
       for (let attempt = 0; attempt < FINAL_CARD_RETRIES; attempt++) {
         try {
           if (attempt > 0) await new Promise((r) => setTimeout(r, FINAL_CARD_BASE_DELAY_MS));
-          await this.sender.sendCard(chatId, resultState);
-          succeeded = true;
-          break;
+          // sendCard swallows transport errors and returns undefined on failure,
+          // so we must check the returned message_id — not just rely on no-throw
+          // — otherwise all-retries-failed would be misreported as success and
+          // the text fallback below would never fire.
+          const resultMessageId = await this.sender.sendCard(chatId, resultState);
+          if (resultMessageId) {
+            succeeded = true;
+            break;
+          }
+          const delay = FINAL_CARD_BASE_DELAY_MS * Math.pow(2, attempt);
+          this.logger.warn({ attempt, delay }, 'Result card send returned no message_id, retrying');
+          await new Promise((r) => setTimeout(r, delay));
         } catch {
           const delay = FINAL_CARD_BASE_DELAY_MS * Math.pow(2, attempt);
-          this.logger.warn({ attempt, delay }, 'Result card send failed, retrying');
+          this.logger.warn({ attempt, delay }, 'Result card send threw, retrying');
           await new Promise((r) => setTimeout(r, delay));
         }
       }
     } else {
       // Single-turn / no-split path: update the existing card in place.
+      // updateCard signals failure via return value (no-throw contract),
+      // so we must check it — otherwise the text fallback below could
+      // never fire on real Feishu outages.
       const displayText = lastTurnText || state.responseText || '_See cards above for full response_';
       const cardState = { ...state, responseText: displayText, cardTitle: '📊 Result' };
       for (let attempt = 0; attempt < FINAL_CARD_RETRIES; attempt++) {
+        let ok = false;
         try {
-          await this.sender.updateCard(messageId, cardState);
-          if (attempt > 0) {
-            await new Promise((r) => setTimeout(r, FINAL_CARD_BASE_DELAY_MS));
-            await this.sender.updateCard(messageId, cardState);
-          }
+          ok = await this.sender.updateCard(messageId, cardState);
+        } catch { /* treat as failure */ }
+        if (ok) {
           succeeded = true;
           break;
-        } catch {
-          const delay = FINAL_CARD_BASE_DELAY_MS * Math.pow(2, attempt);
-          this.logger.warn({ attempt, delay, messageId }, 'Final card update failed, retrying');
-          await new Promise((r) => setTimeout(r, delay));
         }
+        const delay = FINAL_CARD_BASE_DELAY_MS * Math.pow(2, attempt);
+        this.logger.warn({ attempt, delay, messageId }, 'Final card update failed, retrying');
+        await new Promise((r) => setTimeout(r, delay));
       }
       if (succeeded && state.resultSummary && chatId) {
         // For single-turn, send the SDK summary as a follow-up message.
@@ -1726,17 +1733,18 @@ export class MessageBridge {
     // Freeze old card with the completed turn's content so the card itself shows the response.
     const freezeState = { ...state, status: 'complete' as const, responseText: turnText || '', cardTitle: turnLabel };
     let frozen = false;
+    // updateCard's contract is no-throw + boolean return on transport failure,
+    // but we also defend against unexpected throws (e.g. mocks in tests).
     try {
-      await this.sender.updateCard(oldMessageId, freezeState);
-      frozen = true;
-    } catch (err) {
-      // Retry once before creating the new card
+      frozen = await this.sender.updateCard(oldMessageId, freezeState);
+    } catch { /* treat as failure, retry below */ }
+    if (!frozen) {
       await new Promise((r) => setTimeout(r, 1000));
       try {
-        await this.sender.updateCard(oldMessageId, freezeState);
-        frozen = true;
-      } catch (err2) {
-        this.logger.warn({ oldMessageId, err: (err2 as Error).message }, 'recreateCard freeze failed after retry, will retry in background');
+        frozen = await this.sender.updateCard(oldMessageId, freezeState);
+      } catch { /* treat as failure, fall through to background retry */ }
+      if (!frozen) {
+        this.logger.warn({ oldMessageId }, 'recreateCard freeze failed after retry, will retry in background');
       }
     }
     // Create new card at bottom for next turn
@@ -1767,13 +1775,17 @@ export class MessageBridge {
         return;
       }
       setTimeout(async () => {
+        // updateCard is no-throw + boolean on failure; defensive catch for mocks.
+        let ok = false;
         try {
-          await this.sender.updateCard(messageId, freezeState);
+          ok = await this.sender.updateCard(messageId, freezeState);
+        } catch { /* treat as failure */ }
+        if (ok) {
           this.logger.info({ messageId, attempt }, 'Background freeze succeeded');
-        } catch {
-          attempt++;
-          retry();
+          return;
         }
+        attempt++;
+        retry();
       }, delays[attempt]);
     };
     retry();
@@ -1869,7 +1881,7 @@ export class MessageBridge {
       clearTimeout(batch.timerId);
     }
     this.pendingBatches.clear();
-    const updatePromises: Promise<void>[] = [];
+    const updatePromises: Promise<unknown>[] = [];
     for (const [chatId, task] of this.runningTasks) {
       if (task.questionTimeoutId) {
         clearTimeout(task.questionTimeoutId);
@@ -1906,17 +1918,3 @@ export function isStaleSessionError(errorMessage?: string): boolean {
   return /no conversation found|conversation not found|session id|invalid session|each tool_use must have a single result|multiple tool_result blocks/i.test(errorMessage);
 }
 
-/**
- * Generate auto-response content for interactive tools that the bridge
- * handles without user input (plan mode, etc.).
- */
-function getAutoResponse(toolName: string): string {
-  switch (toolName) {
-    case 'ExitPlanMode':
-      return 'User approved the plan. Proceed with implementation.';
-    case 'EnterPlanMode':
-      return 'Plan mode approved. Explore the codebase and design your approach.';
-    default:
-      return 'Approved. Please continue.';
-  }
-}
