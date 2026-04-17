@@ -73,7 +73,15 @@ async function startFeishuBot(botConfig: BotConfig, logger: Logger, memoryServer
     bridge.handleMessage(msg).catch((err) => {
       botLogger.error({ err, msg }, 'Unhandled error in message bridge');
     });
-  }, botOpenId, rawSender);
+  }, botOpenId, rawSender, (evt) => {
+    // Card button click — route to bridge, sharing the same WS activity
+    // liveness signal as regular messages so the heartbeat doesn't flag
+    // an active-by-buttons-only session as disconnected.
+    handle.lastWsActivity = Date.now();
+    bridge.handleCardAction(evt).catch((err) => {
+      botLogger.error({ err, evt }, 'Unhandled error in card action handler');
+    });
+  });
 
   // Create WebSocket client
   const wsClient = new lark.WSClient({

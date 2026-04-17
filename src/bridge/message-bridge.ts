@@ -342,6 +342,67 @@ export class MessageBridge {
     await this.executeQuery(msg);
   }
 
+  /**
+   * Handle a card button click (`card.action.trigger`). Maps the click back
+   * to the running task via `cardMessageId + toolUseId`, then synthesizes a
+   * text answer and reuses the existing `handleAnswer` path. This keeps all
+   * idempotency / multi-question / `answeredToolUseIds` logic centralized.
+   *
+   * Stale clicks (task gone, question already resolved, or toolUseId
+   * mismatch) are no-ops — the user just sees the card move on, which is
+   * the desired behavior.
+   */
+  async handleCardAction(evt: {
+    userId: string;
+    messageId: string;
+    value: Record<string, unknown>;
+  }): Promise<void> {
+    if (evt.value.kind !== 'askuser_answer') {
+      // Unknown action kind — ignore silently. Future action kinds (e.g.
+      // approve/deny buttons) will add their own branches here.
+      return;
+    }
+    const toolUseId = typeof evt.value.toolUseId === 'string' ? evt.value.toolUseId : undefined;
+    const optionIndex = typeof evt.value.optionIndex === 'number' ? evt.value.optionIndex : undefined;
+    if (!toolUseId || optionIndex === undefined || optionIndex < 0) {
+      this.logger.warn({ value: evt.value }, 'askuser_answer action missing toolUseId or optionIndex');
+      return;
+    }
+
+    // Find the task whose card this click came from. We scan by messageId
+    // because runningTasks is keyed by chatId. Match toolUseId to defend
+    // against clicks on stale cards whose task has already moved on to a
+    // different question.
+    let foundChatId: string | undefined;
+    let foundTask: RunningTask | undefined;
+    for (const [chatId, task] of this.runningTasks) {
+      if (task.cardMessageId === evt.messageId && task.pendingQuestion?.toolUseId === toolUseId) {
+        foundChatId = chatId;
+        foundTask = task;
+        break;
+      }
+    }
+    if (!foundTask || !foundChatId) {
+      this.logger.info(
+        { messageId: evt.messageId, toolUseId, optionIndex },
+        'card action for unknown or stale task — ignoring',
+      );
+      return;
+    }
+
+    // Reuse the text-reply path. handleAnswer parses "N" → options[N-1].label
+    // exactly as a user typing the number would, so button and text paths
+    // produce identical state transitions.
+    const syntheticMsg: IncomingMessage = {
+      messageId: `card-action:${toolUseId}:${optionIndex}`,
+      chatId: foundChatId,
+      chatType: 'p2p',
+      userId: evt.userId,
+      text: String(optionIndex + 1),
+    };
+    await this.handleAnswer(syntheticMsg, foundTask);
+  }
+
   private async handleAnswer(msg: IncomingMessage, task: RunningTask): Promise<void> {
     const { chatId, text, imageKey } = msg;
     const pending = task.pendingQuestion!;

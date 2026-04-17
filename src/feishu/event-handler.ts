@@ -9,6 +9,21 @@ import type { IncomingMessage } from '../types.js';
 
 export type MessageHandler = (msg: IncomingMessage) => void;
 
+/**
+ * Card action event emitted when a user clicks a button on an interactive card.
+ * Normalized from Feishu's `card.action.trigger` event.
+ */
+export interface CardActionEvent {
+  /** Open ID of the user who clicked */
+  userId: string;
+  /** Message ID of the card that was clicked (matches task.cardMessageId) */
+  messageId: string;
+  /** Application-defined value object set on the button */
+  value: Record<string, unknown>;
+}
+
+export type CardActionHandler = (evt: CardActionEvent) => void;
+
 // Cache for group member counts (to avoid calling Feishu API on every message)
 const MEMBER_COUNT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const memberCountCache = new Map<string, { count: number; ts: number }>();
@@ -66,8 +81,44 @@ export function createEventDispatcher(
   onMessage: MessageHandler,
   botOpenId?: string,
   messageSender?: MessageSender,
+  onCardAction?: CardActionHandler,
 ): lark.EventDispatcher {
   const dispatcher = new lark.EventDispatcher({});
+
+  // Register interactive card callback handler. Feishu sends this event over
+  // the same WS channel as messages (WSClient.handleEventData dispatches
+  // everything to EventDispatcher.invoke). The SDK's IHandles TS type does
+  // not list 'card.action.trigger', but the runtime Map accepts any key, so
+  // we cast. Return shape follows Feishu's card callback contract — a
+  // `toast` tells the client to show a transient notification without
+  // replacing the card.
+  if (onCardAction) {
+    (dispatcher.register as any)({
+      'card.action.trigger': async (data: any) => {
+        try {
+          const userId: string | undefined =
+            data?.operator?.open_id ?? data?.open_id;
+          const messageId: string | undefined =
+            data?.context?.open_message_id ?? data?.open_message_id;
+          const value: Record<string, unknown> | undefined =
+            data?.action?.value ?? data?.event?.action?.value;
+          if (!userId || !messageId || !value || typeof value !== 'object') {
+            logger.warn(
+              { keys: Object.keys(data || {}) },
+              'card.action.trigger missing expected fields',
+            );
+            return { toast: { type: 'warning', content: '无法识别的按钮事件' } };
+          }
+          onCardAction({ userId, messageId, value });
+          // Empty response is accepted by Feishu — no toast, no card update.
+          return {};
+        } catch (err) {
+          logger.error({ err }, 'Error handling card action trigger');
+          return { toast: { type: 'error', content: '处理失败，请稍后重试' } };
+        }
+      },
+    });
+  }
 
   dispatcher.register({
     'im.message.receive_v1': async (data: any) => {

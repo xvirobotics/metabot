@@ -89,7 +89,7 @@ describe('buildCard', () => {
     expect(errEl).toBeDefined();
   });
 
-  it('builds waiting_for_input card with question', () => {
+  it('builds waiting_for_input card with question + interactive buttons', () => {
     const state: CardState = {
       status: 'waiting_for_input',
       userPrompt: 'deploy',
@@ -110,10 +110,41 @@ describe('buildCard', () => {
     };
     const json = JSON.parse(buildCard(state));
     expect(json.header.template).toBe('yellow');
+
+    // Question header rendered as markdown
     const qEl = json.elements.find((e: any) => e.tag === 'markdown' && e.content.includes('Which env?'));
     expect(qEl).toBeDefined();
-    expect(qEl.content).toContain('Production');
-    expect(qEl.content).toContain('Staging');
+
+    // Option descriptions rendered as markdown above buttons
+    const descEl = json.elements.find(
+      (e: any) => e.tag === 'markdown'
+        && e.content.includes('Production')
+        && e.content.includes('Live environment')
+        && e.content.includes('Staging'),
+    );
+    expect(descEl).toBeDefined();
+
+    // Buttons rendered as action element, one per option, each value carrying
+    // toolUseId + optionIndex so the bridge can route the click.
+    const actionEl = json.elements.find((e: any) => e.tag === 'action');
+    expect(actionEl).toBeDefined();
+    expect(actionEl.actions).toHaveLength(2);
+    expect(actionEl.actions[0]).toMatchObject({
+      tag: 'button',
+      text: { tag: 'plain_text', content: '1. Production' },
+      value: { kind: 'askuser_answer', toolUseId: 'q1', optionIndex: 0 },
+    });
+    expect(actionEl.actions[1]).toMatchObject({
+      tag: 'button',
+      text: { tag: 'plain_text', content: '2. Staging' },
+      value: { kind: 'askuser_answer', toolUseId: 'q1', optionIndex: 1 },
+    });
+
+    // Hint note still tells users they can type a custom answer instead.
+    const hint = json.elements.find(
+      (e: any) => e.tag === 'markdown' && e.content.includes('自定义答案'),
+    );
+    expect(hint).toBeDefined();
   });
 
   it('truncates long content', () => {
