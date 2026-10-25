@@ -351,6 +351,7 @@ Select servers based on your research findings. Here is the **verified catalog**
 | postgres | `@modelcontextprotocol/server-postgres` | `["-y", "@modelcontextprotocol/server-postgres", "postgresql://user:pass@host:5432/db"]` | Database operations | Projects with PostgreSQL |
 | sequential-thinking | `@modelcontextprotocol/server-sequential-thinking` | `["-y", "@modelcontextprotocol/server-sequential-thinking"]` | Structured reasoning | Complex problem-solving |
 | github | HTTP transport | N/A (see below) | GitHub API access | Any project on GitHub |
+| parallel-search | HTTP transport | N/A (see below) | Web search and page fetching, no API key | Opt-in only. Ask the user first; engines without a usable built-in web search (see below) |
 
 > **Note:** Cross-session memory is handled by MetaMemory (integrated in CLAUDE.md via `mm` CLI). No need for the `@modelcontextprotocol/server-memory` MCP package.
 
@@ -367,6 +368,25 @@ Select servers based on your research findings. Here is the **verified catalog**
 ```
 
 **CRITICAL: Only use packages from this verified catalog or packages you have confirmed exist via web search during Phase 1.** Do NOT invent or guess package names.
+
+**Parallel Search MCP (opt-in only)** also uses HTTP transport. Never add it on your own initiative. Only offer it when there is a concrete need the engine's own tools do not cover: the engine has no usable built-in web search/fetch, or the user wants one keyless search/fetch tool that behaves the same across Claude, Kimi, and Codex. If the project already has a search MCP or another search provider configured, keep it: do not replace or duplicate it; skip this entry, or ask the user which provider they want.
+
+When you do offer it, use `AskUserQuestion` and say what leaves the machine: search queries, objectives, and any fetched URLs are sent to Parallel's hosted service at `https://search.parallel.ai/mcp`. Add the entry only on an explicit yes; if the user declines or skips, write nothing.
+
+When the user opts in, merge this entry into the project's `.mcp.json`, preserving any existing servers:
+
+```json
+{
+  "mcpServers": {
+    "parallel-search": {
+      "type": "http",
+      "url": "https://search.parallel.ai/mcp"
+    }
+  }
+}
+```
+
+The anonymous endpoint provides `web_search` (Fast mode) and `web_fetch` without an account or API key, so Phase 3 collects no credentials for this entry. Free access has lower rate limits and is intended for exploration and light use. Because the requests reach a third party, also record in `CLAUDE.md` that agents must keep secrets, credentials, and private content out of queries and objectives, and must not fetch private or signed URLs (internal hosts, pre-signed links, anything carrying a token) through it. See [Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) for tool parameters and limits. Kimi and Codex use their own MCP configuration locations, as listed in Engine Compatibility above; `.mcp.json` is the Claude project configuration.
 
 Only include servers that are genuinely useful for this team type. Don't add servers just to have more — each one should serve a clear purpose.
 
