@@ -8,6 +8,9 @@ export interface IMessageSender {
   /** Actual platform chat ID, distinct from a topic conversation address. */
   getTransportChatId?(conversationId: string): string;
 
+  /** Human-readable chat name, when the platform provides one. */
+  getChatName?(conversationId: string): Promise<string | undefined>;
+
   /** Seed a new topic with its referenced turn, without importing another session. */
   getThreadContext?(conversationId: string): Promise<string | undefined>;
 

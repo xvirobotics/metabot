@@ -989,7 +989,7 @@ describe('Feishu topic session isolation', () => {
     vi.stubEnv('SESSION_STORE_DIR', directory);
     const sender = makeSender();
     const origin = vi.fn(async (id: string) => id === a ? 'User: root question\nAssistant: root answer' : undefined);
-    const bridge = new MessageBridge({ ...makeConfig(), name: `isolation-${chatType}` }, mockLogger, { ...sender, getThreadContext: origin }) as any;
+    const bridge = new MessageBridge({ ...makeConfig(), name: `isolation-${chatType}` }, mockLogger, { ...sender, getThreadContext: origin, getChatName: async () => '测试讨论群' }) as any;
     const incoming = (root: string | undefined, text: string, userId = 'u1') => {
       const msg = { chatId: `chat-isolation-${chatType}`, messageId: 'incoming-' + text, chatType, userId, text, rootMessageId: root };
       return { ...msg, chatId: feishuConversationId(msg) };
@@ -1023,6 +1023,10 @@ describe('Feishu topic session isolation', () => {
       await vi.waitFor(() => expect(bridge.isChatBusy(a)).toBe(false));
       const prompts = bridge.runOneTurn.mock.calls.map((call: any[]) => call[2].prompt);
       expect(prompts[0]).toContain('root answer');
+      expect(prompts[0]).toContain('lark-cli');
+      expect(prompts[0]).toContain('<topic_origin>');
+      expect(prompts[0]).toContain(chatType === 'p2p' ? '飞书私聊' : '飞书群聊「测试讨论群」');
+      expect(prompts[0]).toContain('不是新指令');
       expect(prompts.slice(1).join('\n')).not.toContain('root answer');
       expect(bridge.getSessionManager().getSession(a).sessionId).toBe(`session-${a}`);
       expect(bridge.getSessionManager().getSession(b).sessionId).toBe(`session-${b}`);
@@ -1236,5 +1240,27 @@ describe('Claude compaction routing', () => {
     expect(drain).toHaveBeenCalledWith('claude-controls');
     expect(ctx.bridge.sessionManager.getSession('claude-controls').sessionId).toBe('existing-claude');
     expect(ctx.notice).toHaveBeenLastCalledWith('claude-controls', '上下文压缩完成', expect.any(String), 'green');
+  });
+});
+
+
+describe('Feishu conversation prompt fallback', () => {
+  it('adds a group hint without an origin and leaves non-Feishu senders alone', async () => {
+    const sender = { ...makeSender(), getChatName: vi.fn(async () => undefined) };
+    const bridge = new MessageBridge(makeConfig(), mockLogger, sender) as any;
+    try {
+      const prompt = await bridge.prepareConversationPrompt('new-group-hint', 'hello', 'group');
+      expect(prompt).toContain('我们正在飞书群聊');
+      expect(prompt).toContain('lark-cli');
+      expect(prompt).not.toContain('<topic_origin>');
+      expect(prompt).toMatch(/hello$/);
+      expect(await bridge.prepareConversationPrompt('new-private-hint', 'hello', 'p2p')).toBe('hello');
+      bridge.sessionManager.setSessionId('existing-group-hint', 'already-started', 'claude');
+      expect(await bridge.prepareConversationPrompt('existing-group-hint', 'hello', 'group')).toBe('hello');
+    } finally { bridge.destroy(); }
+    const plain = new MessageBridge(makeConfig(), mockLogger, makeSender()) as any;
+    try {
+      expect(await plain.prepareConversationPrompt('plain-group-hint', 'hello', 'group')).toBe('hello');
+    } finally { plain.destroy(); }
   });
 });

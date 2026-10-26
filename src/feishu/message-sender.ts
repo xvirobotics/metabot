@@ -244,6 +244,17 @@ export class MessageSender {
     }
   }
 
+  async getChatName(chatId: string): Promise<string | undefined> {
+    try {
+      const resp = await this.client.im.v1.chat.get({ path: { chat_id: chatId } });
+      const name = resp?.data?.name;
+      return typeof name === 'string' && name.trim() ? name.trim() : undefined;
+    } catch (err) {
+      this.logger.warn({ err, chatId }, 'Could not read Feishu chat name');
+      return undefined;
+    }
+  }
+
   async isChatOwner(chatId: string, userId: string): Promise<boolean | undefined> {
     const cached = this.chatOwnerCache.get(chatId);
     if (cached && cached.expiresAt > Date.now()) {

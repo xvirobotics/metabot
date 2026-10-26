@@ -24,6 +24,10 @@ export class FeishuSenderAdapter implements IMessageSender {
     return parseFeishuConversation(conversationId).chatId;
   }
 
+  getChatName(conversationId: string): Promise<string | undefined> {
+    return this.sender.getChatName(parseFeishuConversation(conversationId).chatId);
+  }
+
   async resolveCardConversation(chatId: string, messageId: string): Promise<string | undefined> {
     const turn = this.turns?.get(messageId);
     if (turn) return parseFeishuConversation(turn.chatId).chatId === chatId ? turn.chatId : undefined;

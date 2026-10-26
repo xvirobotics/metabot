@@ -8,10 +8,10 @@ import type { BotConfigBase } from '../../config.js';
 import type { CodexReasoningEffort } from '../../config.js';
 import type { Logger } from '../../utils/logger.js';
 import { AsyncQueue } from '../../utils/async-queue.js';
-import { buildMetaBotApiPromptContext } from '../prompt-context.js';
 import type { ApiContext } from '../prompt-context.js';
 import { makeCanUseTool } from './exit-plan-mode.js';
 import { resolveClaudePath } from './resolve-claude.js';
+import { buildClaudeSystemPromptAppend } from './prompt-context.js';
 
 export type { ApiContext } from '../prompt-context.js';
 
@@ -73,7 +73,10 @@ function hasCredentialsFile(): boolean {
  * - Merges process.env so child inherits system PATH, TEMP, etc.
  * - Optionally injects an explicit ANTHROPIC_API_KEY from bots.json config.
  */
-function createSpawnFn(explicitApiKey?: string): (options: SpawnOptions) => SpawnedProcess {
+function createSpawnFn(
+  explicitApiKey?: string,
+  extraEnv?: Record<string, string>,
+): (options: SpawnOptions) => SpawnedProcess {
   // Force-use-env mode: pass ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY /
   // ANTHROPIC_BASE_URL through to the Claude Code subprocess instead of
   // filtering them out. Triggered by either:
@@ -118,6 +121,9 @@ function createSpawnFn(explicitApiKey?: string): (options: SpawnOptions) => Spaw
     // Inject explicit API key from bots.json (after filtering, so it takes effect)
     if (explicitApiKey) {
       env.ANTHROPIC_API_KEY = explicitApiKey;
+    }
+    if (extraEnv) {
+      Object.assign(env, extraEnv);
     }
 
     // Default-enable Claude Code Agent Teams. Without a real terminal there's
@@ -315,7 +321,7 @@ export class ClaudeExecutor {
     private logger: Logger,
   ) {}
 
-  private buildQueryOptions(cwd: string, sessionId: string | undefined, abortController: AbortController, outputsDir?: string, apiContext?: ApiContext): Record<string, unknown> {
+  private buildQueryOptions(cwd: string, sessionId: string | undefined, abortController: AbortController, outputsDir?: string): Record<string, unknown> {
     const isRoot = process.getuid?.() === 0;
     const queryOptions: Record<string, unknown> = {
       permissionMode: isRoot ? 'auto' : ('bypassPermissions' as const),
@@ -330,7 +336,10 @@ export class ClaudeExecutor {
       // (>= 0.2.140) supplies the correct command in spawn options — for the
       // native Claude binary that's the binary itself; for legacy JS
       // entrypoints it's the Node executable.
-      spawnClaudeCodeProcess: createSpawnFn(this.config.claude.apiKey),
+      spawnClaudeCodeProcess: createSpawnFn(
+        this.config.claude.apiKey,
+        outputsDir ? { ASSISTANT_OUTPUTS_DIR: outputsDir } : undefined,
+      ),
       pathToClaudeCodeExecutable: CLAUDE_EXECUTABLE,
       // MetaBot has no terminal — split-pane (tmux/iTerm2) teammate display
       // doesn't apply. Force in-process so teammates run inside the same
@@ -343,56 +352,14 @@ export class ClaudeExecutor {
       agentProgressSummaries: true,
     };
 
-    // Build system prompt appendix from sections
-    const appendSections: string[] = [];
-
-    if (outputsDir) {
-      appendSections.push(`## Output Files\nWhen producing output files for the user (images, PDFs, documents, archives, code files, etc.), copy them to: ${outputsDir}\nUse \`cp\` via the Bash tool. The bridge will automatically send files placed there to the user.`);
-    }
-
-    if (apiContext) {
-      // botName and chatId are per-session — inject into system prompt to avoid
-      // race conditions when multiple chats run concurrently.
-      // Port and secret are already set as METABOT_* env vars in config.ts.
-      appendSections.push(buildMetaBotApiPromptContext(apiContext));
-
-      if (apiContext.teamContext) appendSections.push(apiContext.teamContext);
-
-      // Agent Teams namespace guidance: the team config lives at
-      // ~/.claude/teams/{name}/, which is shared across all bots and chats
-      // on the same host. Tell the lead to namespace team names so concurrent
-      // bots/chats don't collide.
-      const teamNs = `${apiContext.botName}-${apiContext.chatId.slice(0, 8)}`;
-      appendSections.push(
-        [
-          '## Agent Teams (experimental)',
-          `When the user asks you to create an agent team, ALWAYS prefix the team name with \`${teamNs}-\` to avoid collisions with other MetaBot chats sharing this machine. For example: \`${teamNs}-research\`, \`${teamNs}-refactor\`.`,
-          'Display mode is forced to `in-process` (no tmux/iTerm2 in MetaBot). Teammates show up in the user\'s Feishu card via TeammateIdle / TaskCreated / TaskCompleted events — you don\'t need to walk the user through Shift+Down navigation.',
-          'Clean up the team yourself when work is done so resources don\'t leak (`Clean up the team`).',
-        ].join('\n')
-      );
-
-      // Group chat — tell the bot who else is in the group and how to talk to them
-      if (apiContext.groupMembers && apiContext.groupMembers.length > 0) {
-        const others = apiContext.groupMembers.filter((m) => m !== apiContext.botName);
-        const groupId = apiContext.groupId;
-        if (groupId) {
-          appendSections.push(
-            `## Group Chat\nYou are in a group chat (group: ${groupId}) with these bots: ${others.join(', ')}.\nTo talk to another bot, use: \`metabot talk <botName> grouptalk-${groupId}-<botName> "message"\`\nExample: \`metabot talk ${others[0]} grouptalk-${groupId}-${others[0]} "hello"\`\nIMPORTANT: Always use the grouptalk-${groupId}-<botName> chatId pattern when talking to other bots in this group.`
-          );
-        } else {
-          appendSections.push(
-            `## Group Chat\nYou are in a group chat with these bots: ${others.join(', ')}.\nUse \`metabot talk <botName> <chatId> "message"\` to communicate with other bots in the group.`
-          );
-        }
-      }
-    }
-
-    if (appendSections.length > 0) {
+    const systemPromptAppend = buildClaudeSystemPromptAppend({
+      outputsDirAvailable: Boolean(outputsDir),
+    });
+    if (systemPromptAppend) {
       queryOptions.systemPrompt = {
         type: 'preset',
         preset: 'claude_code',
-        append: '\n\n' + appendSections.join('\n\n'),
+        append: systemPromptAppend,
       };
     }
 
@@ -416,7 +383,7 @@ export class ClaudeExecutor {
   }
 
   startExecution(options: ExecutorOptions): ExecutionHandle {
-    const { prompt, cwd, sessionId, abortController, outputsDir, apiContext } = options;
+    const { prompt, cwd, sessionId, abortController, outputsDir } = options;
 
     this.logger.info({ cwd, hasSession: !!sessionId, outputsDir }, 'Starting Claude execution (multi-turn)');
 
@@ -434,7 +401,7 @@ export class ClaudeExecutor {
     };
     inputQueue.enqueue(initialMessage);
 
-    const queryOptions = this.buildQueryOptions(cwd, sessionId, abortController, outputsDir, apiContext);
+    const queryOptions = this.buildQueryOptions(cwd, sessionId, abortController, outputsDir);
     if (options.maxTurns !== undefined) {
       queryOptions.maxTurns = options.maxTurns;
     }

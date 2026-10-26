@@ -35,9 +35,9 @@ import type { SDKUserMessage, SpawnOptions, SpawnedProcess, Query } from '@anthr
 import type { Logger } from '../../utils/logger.js';
 import { AsyncQueue } from '../../utils/async-queue.js';
 import type { SDKMessage, TeamEvent, ApiContext } from './executor.js';
-import { buildMetaBotApiPromptContext } from '../prompt-context.js';
 import { apply1MContextSettings } from './executor.js';
 import { makeCanUseTool } from './exit-plan-mode.js';
+import { buildClaudeSystemPromptAppend } from './prompt-context.js';
 import { ptyQuery } from './pty/pty-query.js';
 import { resolveClaudePath } from './resolve-claude.js';
 import type {
@@ -69,7 +69,10 @@ function hasCredentialsFile(): boolean {
   }
 }
 
-function createSpawnFn(explicitApiKey?: string): (options: SpawnOptions) => SpawnedProcess {
+function createSpawnFn(
+  explicitApiKey?: string,
+  extraEnv?: Record<string, string>,
+): (options: SpawnOptions) => SpawnedProcess {
   // Mirror executor.ts: when env-based Anthropic auth is in use (proxy /
   // gateway via ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN), bypass the
   // credentials.json filter so ANTHROPIC_AUTH_TOKEN reaches the subprocess.
@@ -94,6 +97,7 @@ function createSpawnFn(explicitApiKey?: string): (options: SpawnOptions) => Spaw
       env[key] = value;
     }
     if (explicitApiKey) env.ANTHROPIC_API_KEY = explicitApiKey;
+    if (extraEnv) Object.assign(env, extraEnv);
     if (env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === undefined) {
       env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1';
     }
@@ -129,9 +133,9 @@ export interface PersistentExecutorOptions {
   model?: string;
   logger: Logger;
   /**
-   * MetaBot bot/chat context. Stable for the lifetime of the executor
-   * (the executor is keyed by chatId in the registry). Baked into the
-   * system prompt at start() so all turns see it.
+   * Bridge-local bot/chat context. Stable for the lifetime of the executor
+   * (the executor is keyed by chatId in the registry). It is intentionally
+   * not forwarded to Claude's system prompt.
    */
   apiContext?: ApiContext;
   /**
@@ -409,7 +413,10 @@ export class PersistentClaudeExecutor extends EventEmitter {
       cwd: this.options.cwd,
       includePartialMessages: true,
       settingSources: ['user', 'project'],
-      spawnClaudeCodeProcess: createSpawnFn(this.options.apiKey),
+      spawnClaudeCodeProcess: createSpawnFn(
+        this.options.apiKey,
+        this.options.outputsDir ? { ASSISTANT_OUTPUTS_DIR: this.options.outputsDir } : undefined,
+      ),
       pathToClaudeCodeExecutable: CLAUDE_EXECUTABLE,
       settings: { teammateMode: 'in-process' },
       agentProgressSummaries: true,
@@ -421,49 +428,17 @@ export class PersistentClaudeExecutor extends EventEmitter {
     const resume = this.sessionId ?? this.options.resumeSessionId;
     if (resume) queryOptions.resume = resume;
 
-    // System prompt: bake in MetaBot context + outputs dir + team namespace
-    // guidance. Stable for the lifetime of this executor (this differs from
-    // the legacy executor which rebuilds per turn).
-    const appendSections: string[] = [];
-    if (this.options.outputsDir) {
-      appendSections.push(
-        `## Output Files\nWhen producing output files for the user (images, PDFs, documents, archives, code files, etc.), copy them to: ${this.options.outputsDir}\nUse \`cp\` via the Bash tool. The bridge will automatically send files placed there to the user.`,
-      );
-    }
-    if (this.options.apiContext) {
-      const ctx = this.options.apiContext;
-      appendSections.push(buildMetaBotApiPromptContext(ctx));
-      if (ctx.teamContext) appendSections.push(ctx.teamContext);
-      if (ctx.groupMembers && ctx.groupMembers.length > 0) {
-        const others = ctx.groupMembers.filter((m) => m !== ctx.botName);
-        if (ctx.groupId) {
-          appendSections.push(
-            `## Group Chat\nYou are in a group chat (group: ${ctx.groupId}) with these bots: ${others.join(', ')}.\nTo talk to another bot, use: \`metabot talk <botName> grouptalk-${ctx.groupId}-<botName> "message"\`\nExample: \`metabot talk ${others[0]} grouptalk-${ctx.groupId}-${others[0]} "hello"\`\nIMPORTANT: Always use the grouptalk-${ctx.groupId}-<botName> chatId pattern when talking to other bots in this group.`,
-          );
-        } else {
-          appendSections.push(
-            `## Group Chat\nYou are in a group chat with these bots: ${others.join(', ')}.\nUse \`metabot talk <botName> <chatId> "message"\` to communicate with other bots in the group.`,
-          );
-        }
-      }
-      const teamNs = `${ctx.botName}-${ctx.chatId.slice(0, 8)}`;
-      appendSections.push(
-        [
-          '## Agent Teams (experimental)',
-          `When the user asks you to create an agent team, ALWAYS prefix the team name with \`${teamNs}-\` to avoid collisions with other MetaBot chats sharing this machine. For example: \`${teamNs}-research\`, \`${teamNs}-refactor\`.`,
-          'Display mode is forced to `in-process` (no tmux/iTerm2 in MetaBot). Teammates show up in the user\'s Feishu card via TeammateIdle / TaskCreated / TaskCompleted events — you don\'t need to walk the user through Shift+Down navigation.',
-          'Clean up the team yourself when work is done so resources don\'t leak (`Clean up the team`).',
-          '',
-          '## Persistent Session',
-          'You are running inside a LONG-LIVED Claude Code session: this same process serves all the user\'s turns in this chat. Teammates, /goal multi-turn loops, and background tasks survive across user messages — feel free to leave work running between user prompts. The session is only torn down on /reset or after 30 minutes of total silence.',
-        ].join('\n'),
-      );
-    }
-    if (appendSections.length > 0) {
+    // Keep Claude's operational appendix free of bridge identity and routing
+    // metadata. In particular, apiContext must remain local to the bridge.
+    const systemPromptAppend = buildClaudeSystemPromptAppend({
+      outputsDirAvailable: Boolean(this.options.outputsDir),
+      persistent: true,
+    });
+    if (systemPromptAppend) {
       queryOptions.systemPrompt = {
         type: 'preset',
         preset: 'claude_code',
-        append: '\n\n' + appendSections.join('\n\n'),
+        append: systemPromptAppend,
       };
     }
     apply1MContextSettings(queryOptions);
@@ -495,6 +470,7 @@ export class PersistentClaudeExecutor extends EventEmitter {
         resume,
         model: this.options.model,
         systemPrompt: append ? { type: 'preset', preset: 'claude_code', append } : undefined,
+        env: this.options.outputsDir ? { ASSISTANT_OUTPUTS_DIR: this.options.outputsDir } : undefined,
         logger: this.options.logger,
         pathToClaudeExecutable: CLAUDE_EXECUTABLE,
         onInteractiveTool: (tool) => this.handleInteractiveTool(tool),

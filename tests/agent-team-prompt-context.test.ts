@@ -6,6 +6,7 @@ import { buildAgentTeamPromptContext, buildAgentTeamPromptContextForChat } from 
 import { AgentTeamStore } from '../src/agent-teams/team-store.js';
 import type { BotConfigBase } from '../src/config.js';
 import { ClaudeExecutor } from '../src/engines/claude/executor.js';
+import { buildClaudeSystemPromptAppend } from '../src/engines/claude/prompt-context.js';
 import { CodexExecutor } from '../src/engines/codex/executor.js';
 import { KimiExecutor } from '../src/engines/kimi/executor.js';
 
@@ -73,7 +74,7 @@ describe('Agent Team prompt context', () => {
     store.close();
   });
 
-  it('passes the same current-chat and Team Context through Claude, Codex, and Kimi', () => {
+  it('keeps bridge context out of Claude while preserving it for Codex and Kimi', () => {
     const teamContext = ['## Team Context', 'Team: metabot-dev', 'Members:', '- worker — backend · codex · idle'].join(
       '\n',
     );
@@ -85,15 +86,20 @@ describe('Agent Team prompt context', () => {
       teamContext,
     };
     const botConfig = config();
+    const privateOutputsDir = '/tmp/bridge-outputs/oc_sensitive_chat';
 
     const claudeOptions = (new ClaudeExecutor(botConfig, logger) as any).buildQueryOptions(
       '/tmp',
       undefined,
       new AbortController(),
-      undefined,
+      privateOutputsDir,
       apiContext,
     );
     const claudeAppend = claudeOptions.systemPrompt.append as string;
+    const persistentClaudeAppend = buildClaudeSystemPromptAppend({
+      outputsDirAvailable: true,
+      persistent: true,
+    })!;
     const codexPrompt = (new CodexExecutor(botConfig, logger) as any).buildPromptWithContext(
       'hello',
       undefined,
@@ -105,7 +111,21 @@ describe('Agent Team prompt context', () => {
       apiContext,
     );
 
-    for (const prompt of [claudeAppend, codexPrompt, kimiPrompt]) {
+    for (const prompt of [claudeAppend, persistentClaudeAppend]) {
+      expect(prompt).toContain('## Output Files');
+      expect(prompt).not.toContain(teamContext);
+      expect(prompt).not.toContain('MetaBot');
+      expect(prompt).not.toContain('metabot');
+      expect(prompt).not.toContain('Feishu');
+      expect(prompt).not.toContain('Agent: metabot');
+      expect(prompt).not.toContain('Chat ID: oc_team');
+      expect(prompt).not.toContain('Session ID: session_current');
+      expect(prompt).not.toContain(privateOutputsDir);
+      expect(prompt).not.toContain('oc_sensitive_chat');
+      expect(prompt).toContain('$ASSISTANT_OUTPUTS_DIR');
+    }
+
+    for (const prompt of [codexPrompt, kimiPrompt]) {
       expect(prompt).toContain(teamContext);
       expect(prompt).toContain('## Current MetaBot Context');
       expect(prompt).toContain('Agent: metabot');
