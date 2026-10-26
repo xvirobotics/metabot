@@ -30,6 +30,15 @@ MetaMemory 文档单向同步到飞书知识库。MetaMemory 的文件夹树映�
 | `WIKI_SYNC_THROTTLE_MS` | `300` | API 调用间隔 |
 | `FEISHU_SERVICE_APP_ID` | — | 专用飞书应用（回退到第一个 Bot） |
 | `FEISHU_SERVICE_APP_SECRET` | — | 服务应用密钥 |
+| `FEISHU_SERVICE_DOMAIN` | `feishu` | 专用服务应用所在域名：`feishu` 或 `lark` |
+
+### Lark 国际版
+
+知识库同步使用服务应用所在的开放平台域名：
+
+- 未配置专用服务应用时，沿用第一个飞书 Bot 的应用及其 `larkDomain`。该 Bot 配置了 `"larkDomain": "lark"` 时，同步请求发往 `open.larksuite.com`。
+- 配置了 `FEISHU_SERVICE_APP_ID` 时，用 `FEISHU_SERVICE_DOMAIN=lark` 指定该应用创建于 Lark 国际版后台；不配置则为飞书。
+- `FEISHU_SERVICE_DOMAIN` 只能是 `feishu` 或 `lark`，其他值会导致启动失败。未配置专用服务应用时，如果它与第一个 Bot 的域名不一致，同样启动失败，不会把一个应用的凭证发到另一个域名。
 
 ## 所需飞书权限
 

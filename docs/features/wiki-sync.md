@@ -30,6 +30,15 @@ When enabled, MetaMemory content automatically syncs to a Feishu Wiki space:
 | `WIKI_SYNC_THROTTLE_MS` | `300` | Delay between API calls |
 | `FEISHU_SERVICE_APP_ID` | — | Dedicated Feishu app for sync (falls back to first bot) |
 | `FEISHU_SERVICE_APP_SECRET` | — | Service app secret |
+| `FEISHU_SERVICE_DOMAIN` | `feishu` | Domain of the dedicated service app: `feishu` or `lark` |
+
+### Lark (international)
+
+Wiki sync calls the Open Platform domain of the service app:
+
+- Without a dedicated service app, sync reuses the first Feishu bot's app and its `larkDomain`. If that bot sets `"larkDomain": "lark"`, sync requests go to `open.larksuite.com`.
+- With `FEISHU_SERVICE_APP_ID`, set `FEISHU_SERVICE_DOMAIN=lark` when that app was created in the Lark developer console; otherwise it is treated as Feishu.
+- `FEISHU_SERVICE_DOMAIN` accepts only `feishu` or `lark`; any other value fails startup. Without a dedicated service app, a value that contradicts the first bot's domain also fails startup, so one app's credentials are never sent to the other domain.
 
 ## Required Feishu Permissions
 

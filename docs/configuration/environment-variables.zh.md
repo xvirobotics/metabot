@@ -76,6 +76,7 @@ MetaMemory 变量和 `8100` 端口不属于当前个人版。
 | `METABOT_ALLOWED_PEER_CIDRS` | —              | 可选 IPv4 CIDR 转发白名单        |
 | `FEISHU_SERVICE_APP_ID`      | 第一个飞书 Bot | 可选 Wiki/文档读取 Service App   |
 | `FEISHU_SERVICE_APP_SECRET`  | 第一个飞书 Bot | Service App Secret               |
+| `FEISHU_SERVICE_DOMAIN`      | 第一个 Bot / `feishu` | Service App 域名：`feishu` 或 `lark` |
 | `WIKI_SYNC_ENABLED`          | `true`         | 启用可选 Memory-to-Wiki 同步     |
 | `WIKI_SPACE_ID`              | —              | 已有 Wiki Space ID               |
 | `WIKI_SPACE_NAME`            | `MetaMemory`   | Wiki Space 名称                  |

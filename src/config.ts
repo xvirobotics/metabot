@@ -241,6 +241,8 @@ export interface AppConfig {
   feishuService?: {
     appId: string;
     appSecret: string;
+    /** "lark" for a service app created at open.larksuite.com; omitted means Feishu. */
+    domain?: 'feishu' | 'lark';
   };
   log: {
     level: string;
@@ -749,6 +751,14 @@ export interface BotsJsonNewFormat {
   agentTeams?: AgentTeamConfig[];
 }
 
+/** Validate FEISHU_SERVICE_DOMAIN; an unknown value fails startup rather than silently using Feishu. */
+function parseFeishuServiceDomain(value: string | undefined): 'feishu' | 'lark' | undefined {
+  const domain = value?.trim().toLowerCase();
+  if (!domain) return undefined;
+  if (domain === 'feishu' || domain === 'lark') return domain;
+  throw new Error(`FEISHU_SERVICE_DOMAIN must be "feishu" or "lark", got: ${value}`);
+}
+
 export function loadAppConfig(): AppConfig {
   const botsConfigPath = process.env.BOTS_CONFIG;
 
@@ -836,16 +846,27 @@ export function loadAppConfig(): AppConfig {
   }
 
   // Feishu service app for wiki sync & doc reader (falls back to first Feishu bot)
+  const serviceDomain = parseFeishuServiceDomain(process.env.FEISHU_SERVICE_DOMAIN);
   let feishuService: AppConfig['feishuService'];
   if (process.env.FEISHU_SERVICE_APP_ID && process.env.FEISHU_SERVICE_APP_SECRET) {
     feishuService = {
       appId: process.env.FEISHU_SERVICE_APP_ID,
       appSecret: process.env.FEISHU_SERVICE_APP_SECRET,
+      ...(serviceDomain ? { domain: serviceDomain } : {}),
     };
   } else if (feishuBots.length > 0) {
+    // The fallback reuses the first bot's app, so it must use that app's domain.
+    const botDomain = feishuBots[0].feishu.domain;
+    if (serviceDomain && serviceDomain !== (botDomain ?? 'feishu')) {
+      throw new Error(
+        `FEISHU_SERVICE_DOMAIN=${serviceDomain} conflicts with the first Feishu bot's domain (${botDomain ?? 'feishu'}); ` +
+          'set FEISHU_SERVICE_APP_ID/FEISHU_SERVICE_APP_SECRET for a separate service app or remove FEISHU_SERVICE_DOMAIN',
+      );
+    }
     feishuService = {
       appId: feishuBots[0].feishu.appId,
       appSecret: feishuBots[0].feishu.appSecret,
+      ...(botDomain ? { domain: botDomain } : {}),
     };
   }
 

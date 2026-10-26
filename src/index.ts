@@ -6,6 +6,7 @@ import * as lark from '@larksuiteoapi/node-sdk';
 import { loadAppConfig, type BotConfig } from './config.js';
 import { createLarkSdkLogger, createLogger, type Logger } from './utils/logger.js';
 import { createEventDispatcher } from './feishu/event-handler.js';
+import { toLarkSdkDomain } from './feishu/lark-domain.js';
 import { FeishuGroupReplyModeStore } from './feishu/group-reply-mode-store.js';
 import { MessageSender } from './feishu/message-sender.js';
 import { FeishuTurnStore } from './feishu/turn-store.js';
@@ -87,7 +88,7 @@ async function startFeishuBot(
   const client = new lark.Client({
     appId: botConfig.feishu.appId,
     appSecret: botConfig.feishu.appSecret,
-    domain: botConfig.feishu.domain === 'lark' ? lark.Domain.Lark : lark.Domain.Feishu,
+    domain: toLarkSdkDomain(botConfig.feishu.domain),
     disableTokenCache: false,
     logger: larkLogger,
   });
@@ -148,7 +149,7 @@ async function startFeishuBot(
   const wsClient = new lark.WSClient({
     appId: botConfig.feishu.appId,
     appSecret: botConfig.feishu.appSecret,
-    domain: botConfig.feishu.domain === 'lark' ? lark.Domain.Lark : lark.Domain.Feishu,
+    domain: toLarkSdkDomain(botConfig.feishu.domain),
     loggerLevel: lark.LoggerLevel.info,
     logger: larkLogger,
     agent: localAgent,
@@ -390,6 +391,7 @@ async function main() {
     feishuServiceClient = new lark.Client({
       appId: appConfig.feishuService.appId,
       appSecret: appConfig.feishuService.appSecret,
+      domain: toLarkSdkDomain(appConfig.feishuService.domain),
       disableTokenCache: false,
       logger: createLarkSdkLogger(logger.child({ component: 'feishu-service' })),
     });
@@ -407,6 +409,7 @@ async function main() {
       {
         feishuAppId: appConfig.feishuService.appId,
         feishuAppSecret: appConfig.feishuService.appSecret,
+        feishuDomain: appConfig.feishuService.domain,
         databaseDir: syncStateDir,
         wikiSpaceName: process.env.WIKI_SPACE_NAME || 'MetaMemory',
         wikiSpaceId: process.env.WIKI_SPACE_ID || undefined,

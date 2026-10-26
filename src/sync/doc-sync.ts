@@ -5,6 +5,7 @@
  * creating wiki nodes for folders and docx pages for documents.
  */
 import * as lark from '@larksuiteoapi/node-sdk';
+import { toLarkSdkDomain, type FeishuDomain } from '../feishu/lark-domain.js';
 import { createLarkSdkLogger, type Logger } from '../utils/logger.js';
 import type { MemoryClient, FolderTreeNode } from '../memory/memory-client.js';
 import { SyncStore } from './sync-store.js';
@@ -37,6 +38,8 @@ export interface DocSyncConfig {
   feishuAppId: string;
   /** Feishu app secret. */
   feishuAppSecret: string;
+  /** "lark" for apps created at open.larksuite.com; defaults to Feishu. */
+  feishuDomain?: FeishuDomain;
   /** Directory for sync-mapping.db. */
   databaseDir: string;
   /** Optional: wiki space name to find by name. */
@@ -65,6 +68,7 @@ export class DocSync {
     this.client = new lark.Client({
       appId: config.feishuAppId,
       appSecret: config.feishuAppSecret,
+      domain: toLarkSdkDomain(config.feishuDomain),
       disableTokenCache: false,
       logger: createLarkSdkLogger(logger.child({ component: 'feishu-wiki-sync' })),
     });

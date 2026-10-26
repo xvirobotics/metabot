@@ -79,6 +79,7 @@ Multi-bot deployments should store channel credentials in the protected
 | `METABOT_ALLOWED_PEER_CIDRS` | —                | Optional IPv4 CIDR forwarding allowlist |
 | `FEISHU_SERVICE_APP_ID`      | first Feishu bot | Optional Wiki/doc-reader service app    |
 | `FEISHU_SERVICE_APP_SECRET`  | first Feishu bot | Service app secret                      |
+| `FEISHU_SERVICE_DOMAIN`      | first bot / `feishu` | Service app domain: `feishu` or `lark` |
 | `WIKI_SYNC_ENABLED`          | `true`           | Enable optional Memory-to-Wiki sync     |
 | `WIKI_SPACE_ID`              | —                | Existing Wiki space ID                  |
 | `WIKI_SPACE_NAME`            | `MetaMemory`     | Wiki space name                         |
