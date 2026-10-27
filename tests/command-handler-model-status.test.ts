@@ -19,6 +19,7 @@ interface RecordedNotice {
 
 interface BuildOpts {
   engine?: string;
+  availableModels?: string[];
   sessionModel?: string;
   sessionId?: string;
   hasRunningTask?: boolean;
@@ -99,6 +100,7 @@ function buildHandler(opts: BuildOpts = {}) {
   // Config has engine defaults for all supported engines.
   const config = {
     name: 'test-bot',
+    availableModels: opts.availableModels,
     claude: { model: 'claude-opus-4-6' },
     kimi: { model: opts.kimiModel ?? 'kimi-code/k3' },
     codex: { model: 'gpt-5.6', displayModel: 'gpt-5.6', serviceTier: opts.configServiceTier },
@@ -208,12 +210,14 @@ describe('CommandHandler /model', () => {
     expect(notices[0].content).toContain('gpt-5.6');
   });
 
-  it('lists claude models on /model list when engine is claude', async () => {
-    const { handler, notices } = buildHandler({ engine: 'claude' });
+  it('lists the bot catalog on /model list when engine is claude', async () => {
+    const { handler, notices } = buildHandler({
+      engine: 'claude', availableModels: ['bot-model', 'claude-fable-5', 'other-bot-model'],
+    });
     await handler.handle(msg('/model list'));
-    expect(notices[0].content).toContain('claude-opus-4-8');
-    expect(notices[0].content).toContain('claude-sonnet-4-6');
-    expect(notices[0].content).toContain('claude-haiku-4-5');
+    expect(notices[0].content).toContain('`bot-model`');
+    expect(notices[0].content).toContain('`other-bot-model`');
+    expect(notices[0].content).toContain('`claude-fable-5`');
   });
 
   it('lists kimi models on /model list when engine is kimi', async () => {

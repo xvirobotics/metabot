@@ -8,6 +8,7 @@ import type { SessionSummary } from '../engines/claude/session-lister.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { AuditLogger } from '../utils/audit-logger.js';
 import type { DocSync } from '../sync/doc-sync.js';
+import { claudeModelCatalog, type ModelOption } from './model-catalog.js';
 
 export class CommandHandler {
   private docSync: DocSync | null = null;
@@ -442,26 +443,10 @@ export class CommandHandler {
     }
     if (normalized === 'list' || normalized === 'ls') {
       const active = session.model || botDefault;
-      const claudeModels = [
-        {
-          id: 'claude-fable-5',
-          label: 'Fable 5',
-          note: 'Latest Claude Code model · 1M context · 128k max output · adaptive thinking',
-        },
-        {
-          id: 'claude-opus-4-8',
-          label: 'Opus 4.8',
-          note: 'High-capability legacy default · 200k context · 128k max output',
-        },
-        { id: 'claude-opus-4-8[1m]', label: 'Opus 4.8 (1M)', note: '1M context window' },
-        { id: 'claude-opus-4-7', label: 'Opus 4.7', note: '200k context' },
-        { id: 'claude-opus-4-7[1m]', label: 'Opus 4.7 (1M)', note: '1M context window' },
-        { id: 'claude-opus-4-6', label: 'Opus 4.6', note: '200k context' },
-        { id: 'claude-opus-4-6[1m]', label: 'Opus 4.6 (1M)', note: '1M context window' },
-        { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', note: 'Balanced · 200k context' },
-        { id: 'claude-sonnet-4-6[1m]', label: 'Sonnet 4.6 (1M)', note: '1M context window' },
-        { id: 'claude-haiku-4-5', label: 'Haiku 4.5', note: 'Fastest · 200k context' },
-      ];
+      const claudeModels: ModelOption[] = claudeModelCatalog({
+        override: this.config.availableModels,
+        env: process.env,
+      });
       const kimiModels = [
         { id: 'fast', label: 'Fast', note: 'Switch to the highspeed variant of the current model' },
         { id: 'kimi-code/k3.1-pro', label: 'Kimi K3.1 Pro', note: 'Latest flagship · 1M context · thinking required' },
@@ -515,7 +500,7 @@ export class CommandHandler {
           ? '**Available Kimi models:**'
           : activeEngine === 'codex'
             ? '**Common Codex models:**'
-            : '**Available Claude models:**';
+            : '**Available Claude models (from this endpoint\'s configured aliases):**';
       const lines = [
         `**Current engine:** \`${activeEngine}\`${session.engine ? ' (session override)' : ''}`,
         '',
@@ -526,13 +511,11 @@ export class CommandHandler {
       ];
       for (const m of models) {
         const marker = m.id === active || (active && m.id.endsWith(`/${active}`)) ? ' ✅' : '';
-        lines.push(`- \`${m.id}\` — ${m.label} · ${m.note}${marker}`);
+        lines.push(`- \`${m.id}\`${m.note ? ` — ${m.label} · ${m.note}` : ` — ${m.label}`}${marker}`);
       }
       lines.push('');
       if (activeEngine === 'claude') {
-        lines.push(
-          '_Tip: Fable 5 uses its native 1M context. For Opus/Sonnet, append `[1m]` to enable the 1M context window._',
-        );
+        lines.push('_Tip: Context limits and model ID suffixes depend on your endpoint._');
       } else if (activeEngine === 'codex') {
         lines.push('_Tip: leave unset to use the Codex CLI default from `~/.codex/config.toml`._');
       } else {
@@ -761,8 +744,12 @@ export class CommandHandler {
 
   private exampleModelsForEngine(engine: EngineName): string {
     switch (engine) {
-      case 'claude':
-        return '`claude-fable-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5`';
+      case 'claude': {
+        const ids = claudeModelCatalog({ override: this.config.availableModels, env: process.env })
+          .slice(0, 3)
+          .map((model) => `\`${model.id}\``);
+        return ids.length > 0 ? ids.join(', ') : '`/model list`';
+      }
       case 'kimi':
         return '`kimi-code/k3.1-pro`, `kimi-code/k3.1-pro-highspeed`, `kimi-code/k3`, `fast`';
       case 'codex':

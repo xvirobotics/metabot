@@ -60,6 +60,8 @@ export interface BotConfigBase {
   description?: string;
   specialties?: string[];
   icon?: string;
+  /** Claude catalog override; otherwise use effective endpoint aliases, then upstream defaults. */
+  availableModels?: string[];
   maxConcurrentTasks?: number;
   budgetLimitDaily?: number;
   ttsVoice?: string;
@@ -321,6 +323,7 @@ interface EngineJsonFields {
   engine?: EngineName;
   kimi?: KimiJsonConfig;
   codex?: CodexJsonConfig;
+  availableModels?: string[];
   /** Claude turn backend: 'pty' (default) or 'sdk' (legacy opt-out). Overrides env CLAUDE_BACKEND. */
   backend?: 'sdk' | 'pty';
 }
@@ -368,6 +371,13 @@ function feishuBotFromJson(entry: FeishuBotJsonEntry): BotConfig {
     ...(entry.memoryPublic !== undefined ? { memoryPublic: entry.memoryPublic } : {}),
     ...(entry.groupNoMention ? { groupNoMention: true } : {}),
     ...(entry.engine ? { engine: entry.engine } : {}),
+    ...(entry.availableModels?.length
+      ? {
+          availableModels: [
+            ...new Set(entry.availableModels.map((value) => value.trim()).filter(Boolean)),
+          ],
+        }
+      : {}),
     ...(entry.kimi ? { kimi: entry.kimi } : {}),
     ...(codex ? { codex } : {}),
     feishu: {
@@ -418,6 +428,13 @@ function telegramBotFromJson(entry: TelegramBotJsonEntry): TelegramBotConfig {
     ...(entry.visible !== undefined ? { visible: entry.visible } : {}),
     ...(entry.memoryPublic !== undefined ? { memoryPublic: entry.memoryPublic } : {}),
     ...(entry.engine ? { engine: entry.engine } : {}),
+    ...(entry.availableModels?.length
+      ? {
+          availableModels: [
+            ...new Set(entry.availableModels.map((value) => value.trim()).filter(Boolean)),
+          ],
+        }
+      : {}),
     ...(entry.kimi ? { kimi: entry.kimi } : {}),
     ...(codex ? { codex } : {}),
     telegram: {
@@ -464,6 +481,13 @@ export function webBotFromJson(entry: WebBotJsonEntry): BotConfigBase {
     ...(entry.visible !== undefined ? { visible: entry.visible } : {}),
     ...(entry.memoryPublic !== undefined ? { memoryPublic: entry.memoryPublic } : {}),
     ...(entry.engine ? { engine: entry.engine } : {}),
+    ...(entry.availableModels?.length
+      ? {
+          availableModels: [
+            ...new Set(entry.availableModels.map((value) => value.trim()).filter(Boolean)),
+          ],
+        }
+      : {}),
     ...(entry.kimi ? { kimi: entry.kimi } : {}),
     ...(codex ? { codex } : {}),
     claude: buildClaudeConfig(entry),
@@ -498,6 +522,13 @@ function wechatBotFromJson(entry: WechatBotJsonEntry): WechatBotConfig {
     ...(entry.visible !== undefined ? { visible: entry.visible } : {}),
     ...(entry.memoryPublic !== undefined ? { memoryPublic: entry.memoryPublic } : {}),
     ...(entry.engine ? { engine: entry.engine } : {}),
+    ...(entry.availableModels?.length
+      ? {
+          availableModels: [
+            ...new Set(entry.availableModels.map((value) => value.trim()).filter(Boolean)),
+          ],
+        }
+      : {}),
     ...(entry.kimi ? { kimi: entry.kimi } : {}),
     ...(codex ? { codex } : {}),
     wechat: {
@@ -552,6 +583,13 @@ function slackBotFromJson(entry: SlackBotJsonEntry): SlackBotConfig {
     ...(entry.memoryPublic !== undefined ? { memoryPublic: entry.memoryPublic } : {}),
     ...(entry.groupNoMention ? { groupNoMention: true } : {}),
     ...(entry.engine ? { engine: entry.engine } : {}),
+    ...(entry.availableModels?.length
+      ? {
+          availableModels: [
+            ...new Set(entry.availableModels.map((value) => value.trim()).filter(Boolean)),
+          ],
+        }
+      : {}),
     ...(entry.kimi ? { kimi: entry.kimi } : {}),
     ...(codex ? { codex } : {}),
     slack: {
