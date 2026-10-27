@@ -58,6 +58,7 @@ export {
 } from './claude/index.js';
 export type {
   UserSession,
+  ModelPreferenceSelection,
   SDKMessage,
   ExecutionHandle,
   ExecutorOptions,

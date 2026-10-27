@@ -25,6 +25,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { modelName, resolveModelPolicy, type ModelPolicy } from '../model-policy.js';
 import type { Logger } from '../../utils/logger.js';
 import type { TeamEvent, ApiContext } from './executor.js';
 import {
@@ -76,6 +77,7 @@ export interface AcquireOptions {
   onTeamEvent?: (event: TeamEvent) => void;
   /** Override per-acquire model (else uses registry default). */
   model?: string;
+  modelPolicy?: ModelPolicy;
   /** MetaBot bot/chat context baked into the executor's system prompt. */
   apiContext?: ApiContext;
   /** Stable per-chat outputs directory. */
@@ -166,7 +168,7 @@ export class ExecutorRegistry extends EventEmitter {
       try { await pending; } catch { /* shutdown errors are logged at the source */ }
     }
 
-    const effectiveModel = opts.model ?? this.opts.defaultModel;
+    const effectiveModel = modelName(resolveModelPolicy(opts.modelPolicy, opts.model, this.opts.defaultModel));
     const existing = this.executors.get(chatId);
     if (existing) {
       const state = existing.executor.getState();
@@ -370,7 +372,7 @@ export class ExecutorRegistry extends EventEmitter {
     if (waitMs > 0) {
       await new Promise<void>((r) => setTimeout(r, waitMs));
     }
-    const effectiveModel = opts.model ?? this.opts.defaultModel;
+    const effectiveModel = modelName(resolveModelPolicy(opts.modelPolicy, opts.model, this.opts.defaultModel));
     entry.respawnAttempts++;
     const resume = entry.resumeSessionId ?? opts.resumeSessionId;
     this.opts.logger.info(

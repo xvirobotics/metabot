@@ -42,6 +42,12 @@ export interface UserSession {
   goalMaxIterations?: number;
 }
 
+export interface ModelPreferenceSelection {
+  readonly model: string;
+  readonly engine: EngineName | undefined;
+  readonly revision: symbol;
+}
+
 interface PersistedSession {
   sessionId: string;
   sessionIdEngine?: EngineName;
@@ -74,6 +80,7 @@ export const DEFAULT_CODEX_GOAL_MAX_ITERATIONS = 25;
 
 export class SessionManager {
   private sessions = new Map<string, UserSession>();
+  private modelRevisions = new WeakMap<UserSession, symbol>();
   private cleanupTimer: ReturnType<typeof setInterval>;
   private persistPath: string;
 
@@ -158,8 +165,28 @@ export class SessionManager {
     const session = this.getSession(chatId);
     session.model = model;
     session.modelEngine = model ? engine : undefined;
+    this.modelRevisions.set(session, Symbol());
     this.logger.info({ chatId, model, engine: session.modelEngine }, 'Session model override updated');
     this.saveToDisk();
+  }
+
+  captureModelPreference(chatId: string): ModelPreferenceSelection | undefined {
+    const session = this.getSession(chatId);
+    if (!session.model) return undefined;
+    let revision = this.modelRevisions.get(session);
+    if (!revision) {
+      revision = Symbol();
+      this.modelRevisions.set(session, revision);
+    }
+    return { model: session.model, engine: session.modelEngine, revision };
+  }
+
+  clearModelPreferenceIfCurrent(chatId: string, selected: ModelPreferenceSelection): boolean {
+    const session = this.sessions.get(chatId);
+    if (!session || session.model !== selected.model || session.modelEngine !== selected.engine
+      || this.modelRevisions.get(session) !== selected.revision) return false;
+    this.setSessionModel(chatId, undefined);
+    return true;
   }
 
   /** Set per-session Codex reasoning effort override. Pass undefined to clear. */
@@ -190,6 +217,7 @@ export class SessionManager {
     session.sessionIdEngine = undefined;
     session.model = undefined;
     session.modelEngine = undefined;
+    this.modelRevisions.set(session, Symbol());
     session.reasoningEffort = undefined;
     session.serviceTier = undefined;
     this.logger.info({ chatId, engine }, 'Session engine override updated (session reset)');

@@ -24,7 +24,7 @@ export class ClaudeEngine implements Engine {
 export { ClaudeExecutor } from './executor.js';
 export { StreamProcessor, extractImagePaths } from './stream-processor.js';
 export { DEFAULT_CODEX_GOAL_MAX_ITERATIONS, SessionManager } from './session-manager.js';
-export type { UserSession } from './session-manager.js';
+export type { UserSession, ModelPreferenceSelection } from './session-manager.js';
 export type {
   SDKMessage,
   ExecutionHandle,

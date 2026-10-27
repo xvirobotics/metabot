@@ -1,3 +1,4 @@
+import { modelName, resolveModelPolicy } from '../model-policy.js';
 import type { BotConfigBase } from '../../config.js';
 import type { Logger } from '../../utils/logger.js';
 import type { ApiContext, ExecutionHandle, ExecutorOptions, SDKMessage } from '../claude/executor.js';
@@ -127,7 +128,7 @@ export class KimiExecutor {
     let turnState: KimiTurnState | undefined;
     async function* stream(): AsyncGenerator<SDKMessage> {
       try {
-        const model = await client.resolveModel(options.model ?? config.kimi?.model);
+        const model = await client.resolveModel(modelName(resolveModelPolicy(options.modelPolicy, options.model, config.kimi?.model)));
         const session = await client.openSession(cwd, sessionId, model.id);
         active.sessionId = session.id;
         active.model = model.id;

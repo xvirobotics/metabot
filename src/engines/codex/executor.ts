@@ -4,6 +4,7 @@ import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { modelName, resolveModelPolicy } from '../model-policy.js';
 import type { BotConfigBase, CodexBotConfig, CodexReasoningEffort } from '../../config.js';
 import type { Logger } from '../../utils/logger.js';
 import { AsyncQueue } from '../../utils/async-queue.js';
@@ -371,15 +372,17 @@ export class CodexExecutor {
 
   private startAppServer(options: ExecutorOptions): ExecutionHandle {
     const config = this.config.codex ?? {};
-    const metadata = resolveCodexModelMetadata(config, options.model);
-    const args = buildCodexArgs(config, options.cwd, '', undefined, options.model ?? config.model, options.reasoningEffort, options.serviceTier);
+    const policy = resolveModelPolicy(options.modelPolicy, options.model, config.model);
+    const selectedModel = modelName(policy);
+    const metadata = resolveCodexModelMetadata(config, selectedModel);
+    const args = buildCodexArgs(config, options.cwd, '', undefined, selectedModel, options.reasoningEffort, options.serviceTier);
     const command = buildCodexSpawnCommand(resolveCodexPath(config.executable), [
       ...args.slice(0, args.indexOf('exec')), 'app-server', '--listen', 'stdio://',
     ]);
     const run = startAppServerRun({
       command: command.command, args: command.args, env: buildCodexEnv(config),
       cwd: options.cwd, prompt: this.buildPromptWithContext(options.prompt, options.outputsDir, options.apiContext),
-      sessionId: options.sessionId, model: metadata.model, contextWindow: metadata.contextWindow,
+      sessionId: options.sessionId, model: selectedModel, contextWindow: metadata.contextWindow,
       effort: options.reasoningEffort ?? config.reasoningEffort,
       serviceTier: options.serviceTier ?? config.serviceTier,
       approvalPolicy: config.dangerouslyBypassApprovalsAndSandbox ? 'never' : config.approvalPolicy ?? 'never',
@@ -399,13 +402,14 @@ export class CodexExecutor {
   compact(options: ExecutorOptions): ExecutionHandle {
     if (!options.sessionId) throw new Error('No Codex session to compact');
     const config = this.config.codex ?? {};
-    const args = buildCodexArgs(config, options.cwd, '', undefined, options.model ?? config.model, options.reasoningEffort);
+    const selectedModel = modelName(resolveModelPolicy(options.modelPolicy, options.model, config.model));
+    const args = buildCodexArgs(config, options.cwd, '', undefined, selectedModel, options.reasoningEffort);
     const command = buildCodexSpawnCommand(resolveCodexPath(config.executable), [
       ...args.slice(0, args.indexOf('exec')), 'app-server', '--listen', 'stdio://',
     ]);
     return startCodexCompaction({
       command: command.command, args: command.args, env: buildCodexEnv(config),
-      cwd: options.cwd, sessionId: options.sessionId, model: options.model ?? config.model,
+      cwd: options.cwd, sessionId: options.sessionId, model: selectedModel,
       approvalPolicy: config.dangerouslyBypassApprovalsAndSandbox ? 'never' : config.approvalPolicy ?? 'never',
       sandbox: config.dangerouslyBypassApprovalsAndSandbox ? 'danger-full-access' : config.sandbox ?? 'workspace-write',
       signal: options.abortController.signal,
@@ -421,7 +425,8 @@ export class CodexExecutor {
     if (this.config.codex?.transport === 'app-server') return this.startAppServer(options);
     const { prompt, cwd, sessionId, abortController, outputsDir, apiContext } = options;
     const codexConfig = this.config.codex ?? {};
-    const model = options.model ?? codexConfig.model;
+    const policy = resolveModelPolicy(options.modelPolicy, options.model, codexConfig.model);
+    const model = modelName(policy);
     const modelMetadata = resolveCodexModelMetadata(codexConfig, model);
     const fullPrompt = this.buildPromptWithContext(prompt, outputsDir, apiContext);
     const queue = new AsyncQueue<SDKMessage>();
@@ -429,7 +434,7 @@ export class CodexExecutor {
       model: modelMetadata.model,
       contextWindow: modelMetadata.contextWindow,
     });
-    const args = buildCodexArgs(codexConfig, cwd, fullPrompt, sessionId, model ?? modelMetadata.model, options.reasoningEffort, options.serviceTier);
+    const args = buildCodexArgs(codexConfig, cwd, fullPrompt, sessionId, options.modelPolicy?.kind === 'endpoint-default' ? undefined : model ?? modelMetadata.model, options.reasoningEffort, options.serviceTier);
     const startTime = Date.now();
     let child: ChildProcess | undefined;
     let sawResult = false;

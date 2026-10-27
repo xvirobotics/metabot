@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKUserMessage, SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
+import { resolveModelPolicy } from '../model-policy.js';
 import type { BotConfigBase } from '../../config.js';
 import type { CodexReasoningEffort } from '../../config.js';
 import type { Logger } from '../../utils/logger.js';
@@ -243,7 +244,9 @@ export interface ExecutorOptions {
   apiContext?: ApiContext;
   /** Override maxTurns for this execution. */
   maxTurns?: number;
-  /** Override model for this execution (e.g. faster model for voice calls). */
+  /** Explicit selection intent. Endpoint default bypasses MetaBot configuration. */
+  modelPolicy?: import('../model-policy.js').ModelPolicy;
+  /** Named selection for callers that do not supply a policy. */
   model?: string;
   /** Per-turn Codex reasoning effort override. Ignored by non-Codex executors. */
   reasoningEffort?: CodexReasoningEffort;
@@ -438,9 +441,9 @@ export class ClaudeExecutor {
     if (options.maxTurns !== undefined) {
       queryOptions.maxTurns = options.maxTurns;
     }
-    if (options.model) {
-      queryOptions.model = options.model;
-    }
+    const policy = resolveModelPolicy(options.modelPolicy, options.model, this.config.claude.model);
+    delete queryOptions.model;
+    if (policy.kind === 'named') queryOptions.model = policy.name;
     if (options.allowedTools !== undefined) {
       queryOptions.allowedTools = options.allowedTools;
     }
@@ -649,6 +652,12 @@ export class ClaudeExecutor {
     this.logger.info({ cwd, hasSession: !!sessionId }, 'Starting Claude execution');
 
     const queryOptions = this.buildQueryOptions(cwd, sessionId, abortController, outputsDir);
+    const policy = resolveModelPolicy(options.modelPolicy, options.model, this.config.claude.model);
+    delete queryOptions.model;
+    if (policy.kind === 'named') queryOptions.model = policy.name;
+    if (options.maxTurns !== undefined) queryOptions.maxTurns = options.maxTurns;
+    if (options.allowedTools !== undefined) queryOptions.allowedTools = options.allowedTools;
+    apply1MContextSettings(queryOptions);
 
     const stream = query({
       prompt,

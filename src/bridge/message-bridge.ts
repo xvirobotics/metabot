@@ -2,11 +2,14 @@ import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import type { BotConfigBase } from '../config.js';
+import { modelName, resolveModelPolicy, type ModelPolicy } from '../engines/model-policy.js';
+import type { ExecutorOptions } from '../engines/claude/executor.js';
 import type { Logger } from '../utils/logger.js';
 import type { BackgroundEvent, IncomingMessage, CardState, PendingQuestion, TeamState, TeamMember, TeamTask } from '../types.js';
 import type { IMessageSender } from './message-sender.interface.js';
 import type { DocSync } from '../sync/doc-sync.js';
 import type {
+  ModelPreferenceSelection,
   Engine,
   Executor,
   ExecutionHandle,
@@ -49,7 +52,7 @@ import {
 } from './bridge-constants.js';
 import { CodexCommandController } from './codex-command-controller.js';
 import { buildCodexGoalPrompt } from './codex-goal-policy.js';
-import { isContextOverflowError, isStaleSessionError } from './error-classifiers.js';
+import { isContextOverflowError, isStaleSessionError, isUnknownModelError } from './error-classifiers.js';
 import { sendFinalCardWithRetry, sendPlanContent } from './final-delivery.js';
 import { isDefaultMediaText, mergeBatchMessages, mergeBatchWithText, type PendingBatch } from './media-batch.js';
 import { sendCompletionNotice } from './notification-policy.js';
@@ -60,7 +63,7 @@ import type { AgentTeamStore } from '../agent-teams/team-store.js';
 import { buildAgentTeamCardSnapshot } from '../agent-teams/card-snapshot.js';
 import { buildAgentTeamPromptContextForChat } from '../agent-teams/prompt-context.js';
 
-export { isContextOverflowError, isStaleSessionError } from './error-classifiers.js';
+export { isContextOverflowError, isStaleSessionError, isUnknownModelError } from './error-classifiers.js';
 export { normalizePromptForEngine } from './prompt-normalizer.js';
 export { extractSpontaneousSnippet, formatSpontaneousCardBody } from './spontaneous-activity.js';
 
@@ -108,7 +111,7 @@ export function resolvePersistentExecutorEnvDefault(envVal: string | undefined):
 interface RunningTask {
   abortController: AbortController;
   startTime: number;
-  executionHandle: ExecutionHandle;
+  executionHandle?: ExecutionHandle;
   pendingQuestion: PendingQuestion | null;
   /** Index of the question currently being displayed within pendingQuestion.questions */
   currentQuestionIndex: number;
@@ -131,7 +134,29 @@ interface RunningTask {
   sendCards: boolean;
   /** Live snapshot of the active Agent Team, accumulated from team hooks. */
   teamState?: TeamState;
+  executionStarted?: boolean;
 }
+
+type TurnOptions = Omit<ExecutorOptions, 'sessionId'> & {
+  freshSession?: boolean;
+  resume?: { readonly sessionId: string | undefined };
+  backend?: 'persistent' | 'legacy';
+};
+
+type SelectedModel =
+  | { readonly source: 'request' | 'bot' | 'native'; readonly policy: ModelPolicy }
+  | { readonly source: 'session'; readonly policy: ModelPolicy; readonly preference: ModelPreferenceSelection };
+
+interface TurnRequest {
+  readonly chatId: string;
+  readonly engine: EngineName;
+  readonly selected: SelectedModel;
+  readonly options: Readonly<TurnOptions>;
+}
+
+type AttemptOutcome =
+  | { kind: 'terminal'; state: CardState }
+  | { kind: 'provider-failure'; state: CardState; errorMessage: string };
 
 interface StartingTask {
   startTime: number;
@@ -692,7 +717,7 @@ export class MessageBridge {
       });
       task.questionCardMessageId = undefined;
     }
-    task.executionHandle.finish();
+    this.finishTaskHandle(task);
     task.abortController.abort();
     // Clear the busy flag immediately so a follow-up after /stop or /reset can
     // start a fresh turn while the old stream winds down. executeQuery's
@@ -827,9 +852,13 @@ export class MessageBridge {
     if (!exec) return;
     this.spontaneousSubscribed.add(chatId);
     exec.on('spontaneous', (msg) => {
+      const task = this.runningTasks.get(chatId);
+      if (task) task.executionStarted = true;
       this.handleSpontaneousMessage(chatId, msg);
     });
     exec.on('continuation-turn', (handle) => {
+      const task = this.runningTasks.get(chatId);
+      if (task) task.executionStarted = true;
       // Fire-and-forget — handleContinuationTurn manages its own lifecycle
       // (card + stream loop + finalize). Errors are logged inside.
       void this.handleContinuationTurn(chatId, handle as ExecutionHandle);
@@ -860,6 +889,8 @@ export class MessageBridge {
     chatId: string,
     payload: { toolUseId: string; questions: PendingQuestion['questions']; planText?: string },
   ): Promise<void> {
+    const task = this.runningTasks.get(chatId);
+    if (task) task.executionStarted = true;
     if (!payload.questions || payload.questions.length === 0) {
       this.logger.warn({ chatId, toolUseId: payload.toolUseId }, 'between-turn question with no parsed questions; skipping card');
       return;
@@ -1508,31 +1539,19 @@ export class MessageBridge {
   private async runOneTurn(
     chatId: string,
     engineName: EngineName,
-    opts: {
-      prompt: string;
-      cwd: string;
-      abortController: AbortController;
-      outputsDir: string;
-      apiContext?: ApiContext;
-      model?: string;
-      reasoningEffort?: import('../config.js').CodexReasoningEffort;
-      serviceTier?: 'fast' | 'flex' | 'default';
-      onTeamEvent?: (event: TeamEvent) => void;
-      maxTurns?: number;
-      allowedTools?: string[];
-      freshSession?: boolean;
-    },
+    opts: TurnOptions,
   ): Promise<ExecutionHandle> {
     const session = this.sessionManager.getSession(chatId);
     // Persistent only applies to Claude. Options that need per-turn binding
     // (maxTurns / allowedTools) aren't plumbed through the persistent path yet,
     // so fall back to legacy spawn when they're present — matches the gating
     // that {@link executeApiTask} previously did inline.
-    const usePersistent =
-      this.isPersistentExecutorEnabled() &&
-      engineName === 'claude' &&
-      opts.maxTurns === undefined &&
-      opts.allowedTools === undefined;
+    const usePersistent = opts.backend
+      ? opts.backend === 'persistent'
+      : this.isPersistentExecutorEnabled() && engineName === 'claude'
+        && opts.maxTurns === undefined && opts.allowedTools === undefined;
+    const policy = resolveModelPolicy(opts.modelPolicy, opts.model, this.configuredModel(engineName));
+    const sessionId = opts.freshSession ? undefined : opts.resume ? opts.resume.sessionId : session.sessionId;
 
     if (usePersistent) {
       if (opts.freshSession) {
@@ -1544,31 +1563,170 @@ export class MessageBridge {
       }
       const exec = await this.getOrCreateRegistry().acquire(chatId, {
         cwd: opts.cwd,
-        resumeSessionId: opts.freshSession ? undefined : session.sessionId,
+        resumeSessionId: sessionId,
         onTeamEvent: opts.onTeamEvent,
-        model: opts.model,
+        modelPolicy: policy,
         apiContext: opts.apiContext,
         outputsDir: opts.outputsDir,
       });
-      // TurnHandle is structurally compatible with ExecutionHandle (stream,
-      // sendAnswer, resolveQuestion, finish) — see persistent-executor.ts.
+      if (opts.abortController.signal.aborted) throw new DOMException('Aborted', 'AbortError');
       return exec.nextTurn(opts.prompt) as unknown as ExecutionHandle;
     }
 
     return this.executorForEngine(chatId, engineName).startExecution({
       prompt: opts.prompt,
       cwd: opts.cwd,
-      sessionId: opts.freshSession ? undefined : session.sessionId,
+      sessionId,
       abortController: opts.abortController,
       outputsDir: opts.outputsDir,
       apiContext: opts.apiContext,
-      model: opts.model,
-      reasoningEffort: engineName === 'codex' ? opts.reasoningEffort ?? session.reasoningEffort : undefined,
-      serviceTier: engineName === 'codex' ? opts.serviceTier ?? session.serviceTier : undefined,
+      modelPolicy: policy,
+      reasoningEffort: engineName === 'codex' ? opts.resume ? opts.reasoningEffort : opts.reasoningEffort ?? session.reasoningEffort : undefined,
+      serviceTier: engineName === 'codex' ? opts.resume ? opts.serviceTier : opts.serviceTier ?? session.serviceTier : undefined,
       onTeamEvent: opts.onTeamEvent,
       maxTurns: opts.maxTurns,
       allowedTools: opts.allowedTools,
     });
+  }
+
+  private configuredModel(engine: EngineName): string | undefined {
+    switch (engine) {
+      case 'claude': return this.config.claude.model;
+      case 'codex': return this.config.codex?.model;
+      case 'kimi': return this.config.kimi?.model;
+    }
+  }
+
+  private snapshotTurn(chatId: string, engine: EngineName, options: TurnOptions): TurnRequest {
+    const session = this.sessionManager.getSession(chatId);
+    const preference = this.sessionManager.captureModelPreference(chatId);
+    const configured = this.configuredModel(engine);
+    const selected: SelectedModel = options.model !== undefined
+      ? { source: 'request', policy: { kind: 'named', name: options.model } }
+      : preference && (!preference.engine || preference.engine === engine)
+        ? { source: 'session', policy: { kind: 'named', name: preference.model }, preference }
+        : configured ? { source: 'bot', policy: { kind: 'named', name: configured } }
+          : { source: 'native', policy: { kind: 'endpoint-default' } };
+    const backend = this.isPersistentExecutorEnabled() && engine === 'claude'
+      && options.maxTurns === undefined && options.allowedTools === undefined ? 'persistent' : 'legacy';
+    return {
+      chatId, engine, selected,
+      options: {
+        ...options,
+        model: undefined,
+        modelPolicy: selected.policy,
+        allowedTools: options.allowedTools?.slice(),
+        reasoningEffort: options.reasoningEffort ?? session.reasoningEffort,
+        serviceTier: options.serviceTier ?? session.serviceTier,
+        resume: { sessionId: session.sessionId },
+        backend,
+      },
+    };
+  }
+
+  private finishTaskHandle(task: RunningTask): void {
+    const handle = task.executionHandle;
+    task.executionHandle = undefined;
+    try { handle?.finish(); } catch (err) {
+      this.logger.warn({ err, chatId: task.chatId }, 'Error finishing execution handle');
+    }
+  }
+
+  private async runTurnAttempts(input: {
+    request: TurnRequest;
+    task: RunningTask;
+    reset: () => void;
+    consume: (handle: ExecutionHandle, messages: AsyncGenerator<SDKMessage>) => Promise<CardState>;
+  }): Promise<CardState> {
+    const { request, task } = input;
+    const active = () => !task.abortController.signal.aborted && this.runningTasks.get(request.chatId) === task;
+    let options = request.options;
+    let previousCost: number | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let outcome: AttemptOutcome;
+      let state = task.processor.getCurrentState();
+      let providerFailure: string | undefined;
+      let acquiring = true;
+      try {
+        if (!active()) return { ...state, status: 'error', errorMessage: 'Task was stopped', costUsd: previousCost };
+        const handle = await this.runOneTurn(request.chatId, request.engine, options);
+        acquiring = false;
+        task.executionHandle = handle;
+        if (!active()) {
+          this.finishTaskHandle(task);
+          return { ...state, status: 'error', errorMessage: 'Task was stopped', costUsd: previousCost };
+        }
+        if (this.sender.getThreadContext) this.sessionManager.markThreadContextInitialized(request.chatId);
+        async function* messages(): AsyncGenerator<SDKMessage> {
+          const iterator = handle.stream[Symbol.asyncIterator]();
+          try {
+            for (;;) {
+              let next: IteratorResult<SDKMessage>;
+              try { next = await iterator.next(); }
+              catch (error) {
+                providerFailure = error instanceof Error ? error.message : String(error);
+                throw error;
+              }
+              if (next.done) break;
+              const message = next.value;
+              const rejection = message.type === 'result' && (message.subtype !== 'success' || message.is_error
+                || /^API Error:\s*\d{3}\s/i.test(message.result ?? ''));
+              if (rejection) {
+                providerFailure = message.errors?.join('; ') || message.result || `Ended with: ${message.subtype}`;
+                if ((message.num_turns ?? 0) > 0 || Object.values(message.modelUsage ?? {}).some(usage => usage.outputTokens > 0)
+                  || (message.result && !/^API Error:\s*\d{3}\s/i.test(message.result)
+                    && !isUnknownModelError(message.result))) task.executionStarted = true;
+              } else if (!(message.type === 'system' && message.subtype === 'init')) task.executionStarted = true;
+              yield message;
+            }
+          } finally {
+            await iterator.return?.(undefined);
+          }
+        }
+        state = await input.consume(handle, messages());
+        outcome = providerFailure && state.status === 'error'
+          ? { kind: 'provider-failure', state, errorMessage: providerFailure }
+          : { kind: 'terminal', state };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        state = { ...task.processor.getCurrentState(), status: 'error', errorMessage };
+        outcome = acquiring || providerFailure !== undefined
+          ? { kind: 'provider-failure', state, errorMessage }
+          : { kind: 'terminal', state };
+      }
+      await task.rateLimiter.cancelAndWait();
+      const unknownModel = outcome.kind === 'provider-failure' && isUnknownModelError(outcome.errorMessage);
+      const retryModel = unknownModel && request.selected.policy.kind === 'named' && !task.executionStarted;
+      const retrySession = outcome.kind === 'provider-failure' && !unknownModel && !task.executionStarted
+        && request.options.resume?.sessionId
+        && (isStaleSessionError(outcome.errorMessage) || isContextOverflowError(outcome.errorMessage));
+      if (attempt === 0 && active() && (retryModel || retrySession)) {
+        previousCost = outcome.state.costUsd;
+        this.finishTaskHandle(task);
+        if (request.options.backend === 'persistent') {
+          try { await this.releaseChatExecutor(request.chatId, 'retry-turn'); }
+          catch (error) {
+            return { ...outcome.state, status: 'error', errorMessage: error instanceof Error ? error.message : String(error) };
+          }
+        }
+        if (!active()) return { ...outcome.state, status: 'error', errorMessage: 'Task was stopped' };
+        if (retryModel) {
+          const cleared = request.selected.source === 'session'
+            && this.sessionManager.clearModelPreferenceIfCurrent(request.chatId, request.selected.preference);
+          this.audit.log({ event: 'task_model_fallback', botName: this.config.name, chatId: request.chatId,
+            meta: { unavailableModel: modelName(request.selected.policy), source: request.selected.source, cleared } });
+          options = { ...request.options, modelPolicy: { kind: 'endpoint-default' } };
+        } else {
+          this.sessionManager.resetSession(request.chatId);
+          options = { ...request.options, freshSession: true };
+        }
+        input.reset();
+        continue;
+      }
+      const costUsd = previousCost === undefined ? outcome.state.costUsd : previousCost + (outcome.state.costUsd ?? 0);
+      return { ...outcome.state, costUsd };
+    }
+    throw new Error('Turn attempt bound exceeded');
   }
 
   /**
@@ -2114,7 +2272,7 @@ export class MessageBridge {
     });
     task.questionCardMessageId = undefined;
 
-    task.executionHandle.resolveQuestion(pending.toolUseId, collectedAnswers);
+    task.executionHandle?.resolveQuestion(pending.toolUseId, collectedAnswers);
 
     this.logger.info({ chatId, answers: collectedAnswers, toolUseId: pending.toolUseId }, 'Resolved AskUserQuestion hook with collected answers');
 
@@ -2196,7 +2354,7 @@ export class MessageBridge {
       task.questionCardMessageId = undefined;
     }
 
-    task.executionHandle.resolveQuestion(pending.toolUseId, collectedAnswers);
+    task.executionHandle?.resolveQuestion(pending.toolUseId, collectedAnswers);
   }
 
   /** Timer expired: merge batched media messages and execute. */
@@ -2371,7 +2529,7 @@ export class MessageBridge {
     const displayPrompt = hasMedia && mediaCount > 1
       ? `🖼️ [${mediaCount} files] ${text}`
       : fileKey ? '📎 ' + text : imageKey ? '🖼️ ' + text : text;
-    const processor = new StreamProcessor(displayPrompt);
+    let processor = new StreamProcessor(displayPrompt);
     // Capture mirrored goal once at task start. New /goal messages can't
     // arrive mid-task (handleMessage rejects them with "Task In Progress"),
     // so this stays stable for the whole run.
@@ -2421,6 +2579,7 @@ export class MessageBridge {
 
     const onTeamEvent = (event: TeamEvent) => {
       if (!runningTask) return;
+      runningTask.executionStarted = true;
       const changed = this.applyTeamEvent(runningTask, event);
       if (changed && !abortController.signal.aborted) {
         rateLimiter.schedule(() => {
@@ -2460,44 +2619,13 @@ export class MessageBridge {
       prompt = buildCodexGoalPrompt(prompt, activeGoal, codexGoalIteration, codexGoalMaxIterations);
     }
 
-    // All turn-starting paths (initial + retry) route through runOneTurn so
-    // persistent mode is enforced consistently and stale-session retries
-    // properly release the bound executor before reacquiring.
-    let executionHandle: ExecutionHandle;
-    try {
-      executionHandle = await this.runOneTurn(chatId, engineName, {
-        prompt,
-        cwd,
-        abortController,
-        outputsDir,
-        apiContext: buildApiContext(),
-        model: session.model,
-        onTeamEvent,
-      });
-      if (this.sender.getThreadContext) this.sessionManager.markThreadContextInitialized(chatId);
-    } catch (err) {
-      if (!this.isTaskStartActive(chatId, startingTask)) {
-        await this.finalizeCancelledStart(messageId, displayPrompt);
-        this.cleanupTaskSetup(chatId, imagePath, filePath, extraPaths, outputsDir, true);
-        return;
-      }
-      this.cleanupTaskSetup(chatId, imagePath, filePath, extraPaths, outputsDir);
-      throw err;
-    }
-
-    if (!this.isTaskStartActive(chatId, startingTask)) {
-      try { executionHandle.finish(); } catch { /* ignore */ }
-      await this.finalizeCancelledStart(messageId, displayPrompt);
-      this.cleanupTaskSetup(chatId, imagePath, filePath, extraPaths, outputsDir, true);
-      return;
-    }
-
-    // Register running task
-    const startTime = Date.now();
+    const request = this.snapshotTurn(chatId, engineName, {
+      prompt, cwd, abortController, outputsDir, apiContext: buildApiContext(), onTeamEvent,
+    });
+    const startTime = startingTask.startTime;
     runningTask = {
       abortController,
       startTime,
-      executionHandle,
       pendingQuestion: null,
       currentQuestionIndex: 0,
       collectedAnswers: {},
@@ -2521,9 +2649,9 @@ export class MessageBridge {
     const timeoutId = setTimeout(() => {
       this.logger.warn({ chatId, userId }, 'Task timeout, aborting');
       timedOut = true;
-      executionHandle.finish();
+      this.finishTaskHandle(runningTask);
       abortController.abort();
-    }, TASK_TIMEOUT_MS);
+    }, Math.max(0, TASK_TIMEOUT_MS - (Date.now() - startTime)));
 
     // Idle detection: reset timer on every stream message. Background tasks can
     // legitimately stay silent for a long time, so we only abort after the hard
@@ -2534,16 +2662,16 @@ export class MessageBridge {
       idleTimerId = setTimeout(() => {
         this.logger.warn({ chatId, userId }, 'Task idle timeout (1h no stream), aborting');
         idledOut = true;
-        executionHandle.finish();
+        this.finishTaskHandle(runningTask);
         abortController.abort();
       }, IDLE_TIMEOUT_MS);
     };
     resetIdleTimer();
 
     let lastState: CardState = initialState;
-
-    try {
-      for await (const message of executionHandle.stream) {
+    const consumeAttempt = async (_handle: ExecutionHandle, messages: AsyncGenerator<SDKMessage>): Promise<CardState> => {
+      lastState = initialState;
+      for await (const message of messages) {
         if (abortController.signal.aborted) break;
         resetIdleTimer();
 
@@ -2718,64 +2846,22 @@ export class MessageBridge {
         }
       }
 
-      // Auto-retry with fresh session when Claude can't find the conversation
-      if (lastState.status === 'error' && isStaleSessionError(lastState.errorMessage) && session.sessionId) {
-        this.logger.info({ chatId }, 'Stale session detected, retrying with fresh session');
-        this.sessionManager.resetSession(chatId);
-        lastState = { ...lastState, status: 'running', errorMessage: undefined };
-        await this.sender.updateCard(messageId, { ...lastState, responseText: '_Session expired, retrying..._' });
+      return lastState;
+    };
 
-        // Retry via the shared chokepoint so the persistent executor is
-        // released-then-reacquired (its start() is bound to the now-stale
-        // sessionId; without release, acquire would return the same broken
-        // instance).
-        const retryHandle = await this.runOneTurn(chatId, engineName, {
-          prompt, cwd, abortController, outputsDir, apiContext: buildApiContext(), model: session.model,
-          onTeamEvent, freshSession: true,
+    try {
+      try {
+        lastState = await this.runTurnAttempts({
+          request, task: runningTask, consume: consumeAttempt,
+          reset: () => { processor = new StreamProcessor(displayPrompt); runningTask.processor = processor; },
         });
-        executionHandle.finish();
-        runningTask.executionHandle = retryHandle;
-
-        for await (const message of retryHandle.stream) {
-          if (abortController.signal.aborted) break;
-          resetIdleTimer();
-          const state = processor.processMessage(message);
-          lastState = state;
-          const newSid = processor.getSessionId();
-          if (newSid) this.sessionManager.setSessionId(chatId, newSid, engineName);
-          if (state.status === 'complete' || state.status === 'error') break;
-          rateLimiter.schedule(() => { this.sender.updateCard(messageId, this.enrichWithAgentTeams(state, chatId)); });
-        }
-        await rateLimiter.cancelAndWait();
+      } catch (error) {
+        lastState = { ...lastState, status: 'error', errorMessage: error instanceof Error ? error.message : String(error) };
       }
-
-      // Auto-retry with fresh session on context overflow (e.g. third-party models without compaction)
-      if (lastState.status === 'error' && isContextOverflowError(lastState.errorMessage) && session.sessionId) {
-        this.logger.info({ chatId }, 'Context overflow detected, retrying with fresh session');
-        this.sessionManager.resetSession(chatId);
-        lastState = { ...lastState, status: 'running', errorMessage: undefined };
-        await this.sender.updateCard(messageId, { ...lastState, responseText: '_Context limit reached, starting fresh session..._' });
-
-        const retryHandle = await this.runOneTurn(chatId, engineName, {
-          prompt, cwd, abortController, outputsDir, apiContext: buildApiContext(), model: session.model,
-          onTeamEvent, freshSession: true,
-        });
-        executionHandle.finish();
-        runningTask.executionHandle = retryHandle;
-
-        for await (const message of retryHandle.stream) {
-          if (abortController.signal.aborted) break;
-          resetIdleTimer();
-          const state = processor.processMessage(message);
-          lastState = state;
-          const newSid = processor.getSessionId();
-          if (newSid) this.sessionManager.setSessionId(chatId, newSid, engineName);
-          if (state.status === 'complete' || state.status === 'error') break;
-          rateLimiter.schedule(() => { this.sender.updateCard(messageId, this.enrichWithAgentTeams(state, chatId)); });
-        }
-        await rateLimiter.cancelAndWait();
-      }
-
+      if (abortController.signal.aborted) lastState = {
+        ...lastState, status: 'error',
+        errorMessage: timedOut ? TASK_TIMEOUT_MESSAGE : idledOut ? IDLE_TIMEOUT_MESSAGE : 'Task was stopped',
+      };
       await this.sendFinalCard(messageId, lastState, chatId);
 
       // Audit + cost tracking
@@ -2827,105 +2913,13 @@ export class MessageBridge {
         codexGoalIteration,
         codexGoalMaxIterations,
       );
-    } catch (err: any) {
-      this.logger.error({ err, chatId, userId }, 'Claude execution error');
-
-      // Auto-retry with fresh session when Claude can't find the conversation or context overflows
-      const errMsg: string = err.message || '';
-      if ((isStaleSessionError(errMsg) || isContextOverflowError(errMsg)) && session.sessionId) {
-        const isOverflow = isContextOverflowError(errMsg);
-        this.logger.info({ chatId, isOverflow }, isOverflow ? 'Context overflow in catch, retrying with fresh session' : 'Stale session detected in catch, retrying with fresh session');
-        this.sessionManager.resetSession(chatId);
-        const retryMsg = isOverflow ? '_Context limit reached, starting fresh session..._' : '_Session expired, retrying..._';
-        await this.sender.updateCard(messageId, { ...lastState, status: 'running', responseText: retryMsg });
-
-        try {
-          const retryHandle = await this.runOneTurn(chatId, engineName, {
-            prompt, cwd, abortController, outputsDir, apiContext: buildApiContext(), model: session.model,
-            onTeamEvent, freshSession: true,
-          });
-          executionHandle.finish();
-          runningTask.executionHandle = retryHandle;
-
-          for await (const message of retryHandle.stream) {
-            if (abortController.signal.aborted) break;
-            resetIdleTimer();
-            const state = processor.processMessage(message);
-            lastState = state;
-            const newSid = processor.getSessionId();
-            if (newSid) this.sessionManager.setSessionId(chatId, newSid, engineName);
-            if (state.status === 'complete' || state.status === 'error') break;
-            rateLimiter.schedule(() => { this.sender.updateCard(messageId, this.enrichWithAgentTeams(state, chatId)); });
-          }
-          await rateLimiter.cancelAndWait();
-          await this.sendFinalCard(messageId, lastState, chatId);
-
-          const durationMs = Date.now() - startTime;
-          this.audit.log({
-            event: lastState.status === 'error' ? 'task_error' : 'task_complete',
-            botName: this.config.name, chatId, userId, prompt: text,
-            durationMs, costUsd: lastState.costUsd, error: lastState.errorMessage,
-          });
-          this.emitActivity({
-            type: lastState.status === 'complete' ? 'task_completed' : 'task_failed',
-            botName: this.config.name, chatId, userId, prompt: text?.slice(0, 200),
-            responsePreview: lastState.responseText?.slice(0, 200),
-            costUsd: lastState.costUsd, durationMs, errorMessage: lastState.errorMessage,
-            timestamp: Date.now(),
-          });
-          this.costTracker.record({ botName: this.config.name, userId, success: lastState.status === 'complete', costUsd: lastState.costUsd, durationMs });
-          metrics.incCounter('metabot_tasks_total');
-          metrics.incCounter('metabot_tasks_by_status', lastState.status === 'complete' ? 'success' : 'error');
-
-          this.recordSession(chatId, displayPrompt, lastState.responseText, processor.getSessionId(), lastState.costUsd, durationMs);
-          if (lastState.status === 'complete') void this.shadowMode.observeFinal(chatId, text, lastState.responseText).catch(err => {
-            this.logger.warn({ err, chatId }, 'Shadow Mode retry observation failed');
-          });
-          await sendCompletionNotice({
-            sender: this.sender,
-            config: this.config,
-            logger: this.logger,
-            chatId,
-            state: lastState,
-            durationMs,
-          });
-          await this.outputHandler.sendOutputFiles(chatId, outputsDir, processor, lastState);
-          return; // skip the normal error handling below
-        } catch (retryErr: any) {
-          this.logger.error({ err: retryErr, chatId }, 'Retry after stale session also failed');
-          lastState = { ...lastState, status: 'error', errorMessage: retryErr.message || 'Retry failed' };
-        }
-      }
-
-      const durationMs = Date.now() - startTime;
-      this.audit.log({
-        event: 'task_error', botName: this.config.name, chatId, userId, prompt: text,
-        durationMs, error: err.message || 'Unknown error',
-      });
-      this.emitActivity({
-        type: 'task_failed', botName: this.config.name, chatId, userId, prompt: text?.slice(0, 200),
-        errorMessage: err.message || 'Unknown error', durationMs, timestamp: Date.now(),
-      });
-      this.costTracker.record({ botName: this.config.name, userId, success: false, durationMs });
-      metrics.incCounter('metabot_tasks_total');
-      metrics.incCounter('metabot_tasks_by_status', 'error');
-
-      const errorState: CardState = {
-        status: 'error',
-        userPrompt: displayPrompt,
-        responseText: lastState.responseText,
-        toolCalls: lastState.toolCalls,
-        errorMessage: err.message || 'Unknown error',
-      };
-      await rateLimiter.cancelAndWait();
-      await this.sendFinalCard(messageId, errorState, chatId);
     } finally {
       clearTimeout(timeoutId);
       if (idleTimerId) clearTimeout(idleTimerId);
       if (runningTask.questionTimeoutId) {
         clearTimeout(runningTask.questionTimeoutId);
       }
-      try { executionHandle.finish(); } catch (e) { this.logger.warn({ err: e, chatId }, 'Error finishing execution handle'); }
+      this.finishTaskHandle(runningTask);
       // Only delete if this is still our task (guards against stopTask race condition)
       const ownsChat = this.runningTasks.get(chatId) === runningTask;
       if (ownsChat) {
@@ -3001,7 +2995,7 @@ export class MessageBridge {
     const outputsDir = this.outputsManager.prepareDir(chatId);
 
     const displayPrompt = originalPrompt;
-    const processor = new StreamProcessor(displayPrompt);
+    let processor = new StreamProcessor(displayPrompt);
     const rateLimiter = new RateLimiter(1500);
     const activeGoal = session.activeGoal;
 
@@ -3047,6 +3041,7 @@ export class MessageBridge {
 
     const onTeamEvent = (event: TeamEvent) => {
       if (!runningTask) return;
+      runningTask.executionStarted = true;
       const changed = this.applyTeamEvent(runningTask, event);
       if (changed && sendCards && messageId && !abortController.signal.aborted) {
         rateLimiter.schedule(() => {
@@ -3061,45 +3056,14 @@ export class MessageBridge {
       }
     };
 
-    // Persistent vs legacy executor — see executeQuery for the same pattern.
-    // API task path also honors the feature flag, but only for Claude engine
-    // and only when no per-turn maxTurns/allowedTools overrides are supplied
-    // (those mid-stream knobs are baked into the legacy executor's per-turn
-    // options; persistent executor would need additional plumbing to apply
-    // them per-turn — runOneTurn falls back to legacy spawn automatically
-    // when those are set.
-    let executionHandle: ExecutionHandle;
-    try {
-      executionHandle = await this.runOneTurn(chatId, engineName, {
-        prompt,
-        cwd,
-        abortController,
-        outputsDir,
-        apiContext: buildApiContext(),
-        maxTurns: options.maxTurns,
-        model: options.model ?? session.model,
-        allowedTools: options.allowedTools,
-        onTeamEvent,
-      });
-      if (this.sender.getThreadContext) this.sessionManager.markThreadContextInitialized(chatId);
-    } catch (err) {
-      if (!this.isTaskStartActive(chatId, startingTask)) {
-        return this.finalizeCancelledApiStart(options, messageId, effectiveMessageId, outputsDir);
-      }
-      try { this.outputsManager.cleanup(outputsDir); } catch { /* ignore */ }
-      throw err;
-    }
-
-    if (!this.isTaskStartActive(chatId, startingTask)) {
-      try { executionHandle.finish(); } catch { /* ignore */ }
-      return this.finalizeCancelledApiStart(options, messageId, effectiveMessageId, outputsDir);
-    }
-
-    const startTime = Date.now();
+    const request = this.snapshotTurn(chatId, engineName, {
+      prompt, cwd, abortController, outputsDir, apiContext: buildApiContext(),
+      maxTurns: options.maxTurns, model: options.model, allowedTools: options.allowedTools, onTeamEvent,
+    });
+    const startTime = startingTask.startTime;
     runningTask = {
       abortController,
       startTime,
-      executionHandle,
       pendingQuestion: null,
       currentQuestionIndex: 0,
       collectedAnswers: {},
@@ -3122,9 +3086,9 @@ export class MessageBridge {
     const timeoutId = setTimeout(() => {
       this.logger.warn({ chatId, userId }, 'API task timeout, aborting');
       timedOut = true;
-      executionHandle.finish();
+      this.finishTaskHandle(runningTask);
       abortController.abort();
-    }, TASK_TIMEOUT_MS);
+    }, Math.max(0, TASK_TIMEOUT_MS - (Date.now() - startTime)));
 
     let idleTimerId: ReturnType<typeof setTimeout> | undefined;
     const resetIdleTimer = () => {
@@ -3132,22 +3096,16 @@ export class MessageBridge {
       idleTimerId = setTimeout(() => {
         this.logger.warn({ chatId, userId }, 'API task idle timeout (1h no stream), aborting');
         idledOut = true;
-        executionHandle.finish();
+        this.finishTaskHandle(runningTask);
         abortController.abort();
       }, IDLE_TIMEOUT_MS);
     };
     resetIdleTimer();
 
-    let lastState: CardState = {
-      status: 'thinking',
-      userPrompt: displayPrompt,
-      responseText: '',
-      toolCalls: [],
-      goalCondition: activeGoal,
-    };
-
-    try {
-      for await (const message of executionHandle.stream) {
+    let lastState: CardState = initialState;
+    const consumeAttempt = async (executionHandle: ExecutionHandle, messages: AsyncGenerator<SDKMessage>): Promise<CardState> => {
+      lastState = initialState;
+      for await (const message of messages) {
         if (abortController.signal.aborted) break;
         resetIdleTimer();
 
@@ -3227,40 +3185,22 @@ export class MessageBridge {
         }
       }
 
-      // Auto-retry with fresh session when Claude can't find the conversation or context overflows
-      if (lastState.status === 'error' && (isStaleSessionError(lastState.errorMessage) || isContextOverflowError(lastState.errorMessage)) && session.sessionId) {
-        const isOverflow = isContextOverflowError(lastState.errorMessage);
-        this.logger.info({ chatId, isOverflow }, isOverflow ? 'API task: context overflow, retrying with fresh session' : 'API task: stale session detected, retrying with fresh session');
-        this.sessionManager.resetSession(chatId);
-        const retryMsg = isOverflow ? '_Context limit reached, starting fresh session..._' : '_Session expired, retrying..._';
-        if (sendCards && messageId) {
-          await this.sender.updateCard(messageId, { ...lastState, status: 'running', responseText: retryMsg });
-        }
+      return lastState;
+    };
 
-        const retryHandle = await this.runOneTurn(chatId, engineName, {
-          prompt, cwd, abortController, outputsDir, apiContext: buildApiContext(),
-          model: options.model ?? session.model,
-          onTeamEvent, freshSession: true,
+    try {
+      try {
+        lastState = await this.runTurnAttempts({
+          request, task: runningTask, consume: consumeAttempt,
+          reset: () => { processor = new StreamProcessor(displayPrompt); runningTask.processor = processor; },
         });
-        executionHandle.finish();
-        runningTask.executionHandle = retryHandle;
-
-        for await (const message of retryHandle.stream) {
-          if (abortController.signal.aborted) break;
-          resetIdleTimer();
-          const state = processor.processMessage(message);
-          lastState = state;
-          const newSid = processor.getSessionId();
-          if (newSid) this.sessionManager.setSessionId(chatId, newSid, engineName);
-          if (state.status === 'complete' || state.status === 'error') break;
-          if (sendCards && messageId) {
-            rateLimiter.schedule(() => { this.sender.updateCard(messageId!, this.enrichWithAgentTeams(state, chatId)); });
-          }
-          options.onUpdate?.(state, effectiveMessageId, false);
-        }
-        await rateLimiter.cancelAndWait();
+      } catch (error) {
+        lastState = { ...lastState, status: 'error', errorMessage: error instanceof Error ? error.message : String(error) };
       }
-
+      if (abortController.signal.aborted) lastState = {
+        ...lastState, status: 'error',
+        errorMessage: timedOut ? TASK_TIMEOUT_MESSAGE : idledOut ? IDLE_TIMEOUT_MESSAGE : 'Task was stopped',
+      };
       if (sendCards && messageId) {
         await this.sendFinalCard(messageId, lastState, chatId);
       }
@@ -3302,105 +3242,10 @@ export class MessageBridge {
         durationMs,
         error: lastState.errorMessage,
       };
-    } catch (err: any) {
-      this.logger.error({ err, chatId, userId }, 'API task execution error');
-
-      // Auto-retry with fresh session when Claude can't find the conversation or context overflows
-      const errMsg: string = err.message || '';
-      if ((isStaleSessionError(errMsg) || isContextOverflowError(errMsg)) && session.sessionId) {
-        const isOverflow = isContextOverflowError(errMsg);
-        this.logger.info({ chatId, isOverflow }, isOverflow ? 'API task: context overflow in catch, retrying with fresh session' : 'API task: stale session in catch, retrying with fresh session');
-        this.sessionManager.resetSession(chatId);
-        const retryMsg = isOverflow ? '_Context limit reached, starting fresh session..._' : '_Session expired, retrying..._';
-        if (sendCards && messageId) {
-          await this.sender.updateCard(messageId, { ...lastState, status: 'running', responseText: retryMsg });
-        }
-
-        try {
-          const retryHandle = await this.runOneTurn(chatId, engineName, {
-            prompt, cwd, abortController, outputsDir, apiContext: buildApiContext(),
-            model: options.model ?? session.model,
-            onTeamEvent, freshSession: true,
-          });
-          executionHandle.finish();
-          runningTask.executionHandle = retryHandle;
-
-          for await (const message of retryHandle.stream) {
-            if (abortController.signal.aborted) break;
-            resetIdleTimer();
-            const state = processor.processMessage(message);
-            lastState = state;
-            const newSid = processor.getSessionId();
-            if (newSid) this.sessionManager.setSessionId(chatId, newSid, engineName);
-            if (state.status === 'complete' || state.status === 'error') break;
-            if (sendCards && messageId) {
-              rateLimiter.schedule(() => { this.sender.updateCard(messageId!, this.enrichWithAgentTeams(state, chatId)); });
-            }
-            options.onUpdate?.(state, effectiveMessageId, false);
-          }
-          await rateLimiter.cancelAndWait();
-
-          if (sendCards && messageId) {
-            await this.sendFinalCard(messageId, lastState, chatId);
-          }
-          options.onUpdate?.(lastState, effectiveMessageId, true);
-
-          await this.outputHandler.sendOutputFiles(chatId, outputsDir, processor, lastState);
-
-          if (options.onOutputFiles) {
-            const outputFiles = this.outputsManager.scanOutputs(outputsDir);
-            if (outputFiles.length > 0) options.onOutputFiles(outputFiles);
-          }
-
-          return {
-            success: lastState.status === 'complete',
-            responseText: lastState.responseText,
-            sessionId: processor.getSessionId(),
-            costUsd: lastState.costUsd,
-            durationMs: Date.now() - startTime,
-            error: lastState.errorMessage,
-          };
-        } catch (retryErr: any) {
-          this.logger.error({ err: retryErr, chatId }, 'API task retry after stale session also failed');
-          // Fall through to normal error handling
-        }
-      }
-
-      if (sendCards && messageId) {
-        const errorState: CardState = {
-          status: 'error',
-          userPrompt: displayPrompt,
-          responseText: lastState.responseText,
-          toolCalls: lastState.toolCalls,
-          errorMessage: err.message || 'Unknown error',
-        };
-        await rateLimiter.cancelAndWait();
-        await this.sendFinalCard(messageId, errorState, chatId);
-      }
-
-      const catchErrorState: CardState = {
-        status: 'error',
-        userPrompt: displayPrompt,
-        responseText: lastState.responseText,
-        toolCalls: lastState.toolCalls,
-        errorMessage: err.message || 'Unknown error',
-      };
-      options.onUpdate?.(catchErrorState, effectiveMessageId, true);
-
-      this.emitActivity({
-        type: 'task_failed', botName: this.config.name, chatId, userId, prompt: prompt?.slice(0, 200),
-        errorMessage: err.message || 'Unknown error', durationMs: Date.now() - startTime, timestamp: Date.now(),
-      });
-
-      return {
-        success: false,
-        responseText: lastState.responseText,
-        error: err.message || 'Unknown error',
-      };
     } finally {
       clearTimeout(timeoutId);
       if (idleTimerId) clearTimeout(idleTimerId);
-      try { executionHandle.finish(); } catch (e) { this.logger.warn({ err: e, chatId }, 'Error finishing execution handle'); }
+      this.finishTaskHandle(runningTask);
       const ownsChat = this.runningTasks.get(chatId) === runningTask;
       if (ownsChat) {
         this.runningTasks.delete(chatId);
@@ -3477,7 +3322,7 @@ export class MessageBridge {
       if (task.questionTimeoutId) {
         clearTimeout(task.questionTimeoutId);
       }
-      task.executionHandle.finish();
+      this.finishTaskHandle(task);
       task.abortController.abort();
       this.logger.info({ chatId }, 'Aborted running task during shutdown');
     }
