@@ -1,18 +1,25 @@
 import type { Logger } from '../utils/logger.js';
 
 type CircuitState = 'closed' | 'open' | 'half-open';
+type CircuitOutcome = 'success' | 'failure' | 'abandoned';
+
+export interface CircuitAdmission {
+  settle(outcome: CircuitOutcome): void;
+}
 
 interface CircuitConfig {
-  failureThreshold: number;   // failures before opening (default 5)
-  resetTimeoutMs: number;     // time before trying half-open (default 60s)
-  halfOpenMaxAttempts: number; // successful attempts to close (default 2)
+  failureThreshold: number;
+  resetTimeoutMs: number;
+  halfOpenMaxAttempts: number;
 }
 
 interface BotCircuit {
   state: CircuitState;
+  generation: symbol;
   failures: number;
   lastFailure: number;
   halfOpenSuccesses: number;
+  probe?: symbol;
 }
 
 export class CircuitBreaker {
@@ -29,66 +36,69 @@ export class CircuitBreaker {
     };
   }
 
-  private getCircuit(botName: string): BotCircuit {
+  isAvailable(botName: string): boolean {
+    const circuit = this.circuits.get(botName);
+    if (!circuit || circuit.state === 'closed') return true;
+    if (circuit.state === 'open') {
+      return Date.now() - circuit.lastFailure >= this.config.resetTimeoutMs;
+    }
+    return circuit.probe === undefined;
+  }
+
+  tryAcquire(botName: string): CircuitAdmission | undefined {
+    if (!this.isAvailable(botName)) return undefined;
     let circuit = this.circuits.get(botName);
     if (!circuit) {
-      circuit = { state: 'closed', failures: 0, lastFailure: 0, halfOpenSuccesses: 0 };
+      circuit = {
+        state: 'closed', generation: Symbol(), failures: 0,
+        lastFailure: 0, halfOpenSuccesses: 0,
+      };
       this.circuits.set(botName, circuit);
     }
-    return circuit;
-  }
-
-  /** Check if a bot is available (circuit not open). */
-  isAvailable(botName: string): boolean {
-    const circuit = this.getCircuit(botName);
-    if (circuit.state === 'closed') return true;
     if (circuit.state === 'open') {
-      // Check if reset timeout has elapsed -> transition to half-open
-      if (Date.now() - circuit.lastFailure >= this.config.resetTimeoutMs) {
-        circuit.state = 'half-open';
-        circuit.halfOpenSuccesses = 0;
-        this.logger.info({ botName }, 'Circuit half-open, allowing probe request');
-        return true;
-      }
-      return false;
+      circuit.state = 'half-open';
+      circuit.generation = Symbol();
+      circuit.halfOpenSuccesses = 0;
+      this.logger.info({ botName }, 'Circuit half-open, allowing probe request');
     }
-    // half-open: allow requests
-    return true;
+    const entry = circuit;
+    const generation = entry.generation;
+    const probe = entry.state === 'half-open' ? Symbol() : undefined;
+    if (probe) entry.probe = probe;
+    let settled = false;
+
+    return {
+      settle: (outcome) => {
+        if (settled) return;
+        settled = true;
+        if (this.circuits.get(botName) !== entry || entry.generation !== generation) return;
+        if (entry.state === 'half-open') {
+          if (entry.probe !== probe) return;
+          entry.probe = undefined;
+        }
+        if (outcome === 'abandoned') return;
+        if (outcome === 'success') {
+          if (entry.state === 'half-open') {
+            entry.halfOpenSuccesses++;
+            if (entry.halfOpenSuccesses < this.config.halfOpenMaxAttempts) return;
+            entry.state = 'closed';
+            entry.generation = Symbol();
+            this.logger.info({ botName }, 'Circuit closed (recovered)');
+          }
+          entry.failures = 0;
+          return;
+        }
+        entry.failures++;
+        entry.lastFailure = Date.now();
+        if (entry.state === 'half-open' || entry.failures >= this.config.failureThreshold) {
+          entry.state = 'open';
+          entry.generation = Symbol();
+          this.logger.warn({ botName, failures: entry.failures }, 'Circuit opened (execution failed)');
+        }
+      },
+    };
   }
 
-  /** Record a successful execution. */
-  recordSuccess(botName: string): void {
-    const circuit = this.getCircuit(botName);
-    if (circuit.state === 'half-open') {
-      circuit.halfOpenSuccesses++;
-      if (circuit.halfOpenSuccesses >= this.config.halfOpenMaxAttempts) {
-        circuit.state = 'closed';
-        circuit.failures = 0;
-        this.logger.info({ botName }, 'Circuit closed (recovered)');
-      }
-    } else if (circuit.state === 'closed') {
-      // Reset failure count on success
-      circuit.failures = 0;
-    }
-  }
-
-  /** Record a failed execution. */
-  recordFailure(botName: string): void {
-    const circuit = this.getCircuit(botName);
-    circuit.failures++;
-    circuit.lastFailure = Date.now();
-
-    if (circuit.state === 'half-open') {
-      // Failure during half-open -> back to open
-      circuit.state = 'open';
-      this.logger.warn({ botName, failures: circuit.failures }, 'Circuit re-opened (half-open probe failed)');
-    } else if (circuit.failures >= this.config.failureThreshold) {
-      circuit.state = 'open';
-      this.logger.warn({ botName, failures: circuit.failures }, 'Circuit opened (threshold reached)');
-    }
-  }
-
-  /** Get status for all circuits. */
   getStatus(): Record<string, { state: CircuitState; failures: number }> {
     const status: Record<string, { state: CircuitState; failures: number }> = {};
     for (const [name, circuit] of this.circuits) {
@@ -97,7 +107,6 @@ export class CircuitBreaker {
     return status;
   }
 
-  /** Reset a specific bot's circuit. */
   reset(botName: string): void {
     this.circuits.delete(botName);
     this.logger.info({ botName }, 'Circuit manually reset');

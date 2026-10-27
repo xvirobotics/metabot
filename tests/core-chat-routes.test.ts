@@ -6,6 +6,7 @@ import {
   postCoreChatRunEvent,
   __resetCoreChatRunsForTests,
 } from '../src/api/routes/core-chat-routes.js';
+import { CircuitBreaker } from '../src/api/circuit-breaker.js';
 import type { RouteContext } from '../src/api/routes/types.js';
 import type { CardState } from '../src/types.js';
 
@@ -63,11 +64,9 @@ function makeCtx(bridge: any): RouteContext {
     peerManager: undefined,
     asyncTaskStore: {} as any,
     intentRouter: {} as any,
-    circuitBreaker: {
-      isAvailable: vi.fn(() => true),
-      recordSuccess: vi.fn(),
-      recordFailure: vi.fn(),
-    } as any,
+    circuitBreaker: new CircuitBreaker(logger, {
+      failureThreshold: 1, resetTimeoutMs: 1000, halfOpenMaxAttempts: 2,
+    }),
     budgetManager: {
       canAcceptTask: vi.fn(() => ({ allowed: true })),
       recordCost: vi.fn(),
@@ -106,6 +105,21 @@ async function eventually(assertion: () => void): Promise<void> {
   throw lastError;
 }
 
+async function postRun(ctx: RouteContext, overrides: Record<string, unknown> = {}) {
+  const res = makeRes();
+  await handleCoreChatRoutes(ctx, makeReq(runBody(overrides)), res, 'POST', '/api/core-chat/runs');
+  return res;
+}
+
+async function openCoreCircuit(ctx: RouteContext) {
+  const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+  const res = await postRun(ctx, { runId: 'seed-failure' });
+  expect(res.statusCode).toBe(202);
+  await eventually(() => expect(ctx.circuitBreaker.getStatus().metabot.state).toBe('open'));
+  now.mockReturnValue(1000);
+  return now;
+}
+
 describe('handleCoreChatRoutes', () => {
   beforeEach(() => {
     __resetCoreChatRunsForTests();
@@ -117,6 +131,7 @@ describe('handleCoreChatRoutes', () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.clearAllMocks();
+    vi.restoreAllMocks();
     __resetCoreChatRunsForTests();
   });
 
@@ -360,6 +375,168 @@ describe('handleCoreChatRoutes', () => {
     expect(cancelRes.statusCode).toBe(200);
     expect(cancelRes.json()).toMatchObject({ runId: 'run-1', status: 'canceled', stopped: true });
     expect(stopChatTask).toHaveBeenCalledWith('core-conv-1-metabot');
+  });
+
+  it('preserves the recovery probe after budget 429', async () => {
+    const executeApiTask = vi.fn().mockResolvedValueOnce({ success: false }).mockResolvedValue({ success: true });
+    const ctx = makeCtx({ executeApiTask, stopChatTask: vi.fn() });
+    await openCoreCircuit(ctx);
+    vi.mocked(ctx.budgetManager.canAcceptTask).mockReturnValueOnce({ allowed: false, reason: 'budget exhausted' });
+    expect((await postRun(ctx)).statusCode).toBe(429);
+    expect((await postRun(ctx)).statusCode).toBe(202);
+    await eventually(() => expect(executeApiTask).toHaveBeenCalledTimes(2));
+  });
+
+  it('does not consume the recovery probe when rejecting a duplicate run', async () => {
+    const executeApiTask = vi.fn()
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce({ success: false })
+      .mockResolvedValue({ success: true });
+    const ctx = makeCtx({ executeApiTask, stopChatTask: vi.fn(() => true) });
+    await postRun(ctx);
+    await openCoreCircuit(ctx);
+    expect((await postRun(ctx)).statusCode).toBe(409);
+    expect((await postRun(ctx, { runId: 'new-probe' })).statusCode).toBe(202);
+    await eventually(() => expect(executeApiTask).toHaveBeenCalledTimes(3));
+  });
+
+  it.each([true, false])('releases a canceled probe and fences late primary success=%s', async (success) => {
+    let finishOld = (_result: { success: boolean }) => {};
+    let finishNew = (_result: { success: boolean }) => {};
+    const executeApiTask = vi.fn()
+      .mockResolvedValueOnce({ success: false })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishNew = resolve; }));
+    const stopChatTask = vi.fn(() => false);
+    const ctx = makeCtx({ executeApiTask, stopChatTask });
+    await openCoreCircuit(ctx);
+    await postRun(ctx);
+    const cancelRes = makeRes();
+    await handleCoreChatRoutes(ctx, makeReq({}), cancelRes, 'POST', '/api/core-chat/runs/run-1/cancel');
+    expect((await postRun(ctx, { runId: 'new-probe' })).statusCode).toBe(202);
+    expect(cancelRes.json()).toMatchObject({ status: 'canceled', stopped: false });
+    finishOld({ success });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect((await postRun(ctx, { runId: 'blocked' })).statusCode).toBe(503);
+    expect(ctx.circuitBreaker.getStatus().metabot).toEqual({ state: 'half-open', failures: 1 });
+    finishNew({ success: true });
+    await eventually(() => expect(ctx.circuitBreaker.isAvailable('metabot')).toBe(true));
+    expect(ctx.circuitBreaker.getStatus().metabot).toEqual({ state: 'half-open', failures: 1 });
+  });
+
+  it('latches cancel before resolving a pending question and stopping execution', async () => {
+    const executeApiTask = vi.fn()
+      .mockResolvedValueOnce({ success: false })
+      .mockImplementationOnce(async ({ onQuestion }) => {
+        await onQuestion({ toolUseId: 'question-cancel', questions: [] });
+        return { success: true };
+      })
+      .mockImplementationOnce(() => new Promise(() => {}));
+    const ctx = makeCtx({ executeApiTask, stopChatTask: vi.fn(() => false) });
+    await openCoreCircuit(ctx);
+    await postRun(ctx);
+    await eventually(() => expect(vi.mocked(fetch).mock.calls.some(call => JSON.parse(call[1]?.body as string).type === 'question')).toBe(true));
+    await handleCoreChatRoutes(ctx, makeReq({}), makeRes(), 'POST', '/api/core-chat/runs/run-1/cancel');
+    expect((await postRun(ctx, { runId: 'new-probe' })).statusCode).toBe(202);
+    expect((await postRun(ctx, { runId: 'blocked' })).statusCode).toBe(503);
+    expect(ctx.circuitBreaker.getStatus().metabot).toEqual({ state: 'half-open', failures: 1 });
+  });
+
+  it('cancels a parked notification without stopping its unrelated busy origin', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let busy = true;
+    const executeApiTask = vi.fn().mockResolvedValueOnce({ success: false }).mockResolvedValue({ success: true });
+    const stopChatTask = vi.fn(() => false);
+    const ctx = makeCtx({ executeApiTask, stopChatTask, isBusy: () => busy });
+    const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+    await postRun(ctx, { runId: 'seed-failure' });
+    await vi.advanceTimersByTimeAsync(0);
+    now.mockReturnValue(1000);
+    await postRun(ctx, { notification: 'error' });
+    const cancelRes = makeRes();
+    await handleCoreChatRoutes(ctx, makeReq({}), cancelRes, 'POST', '/api/core-chat/runs/run-1/cancel');
+    expect(stopChatTask).not.toHaveBeenCalled();
+    expect(cancelRes.json()).toMatchObject({ status: 'canceled', stopped: false });
+    busy = false;
+    expect((await postRun(ctx, { runId: 'new-probe' })).statusCode).toBe(202);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(executeApiTask).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not execute a canceled parked notification after its origin becomes idle', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    let busy = true;
+    const executeApiTask = vi.fn(async () => ({ success: true }));
+    const ctx = makeCtx({ executeApiTask, stopChatTask: () => false, isBusy: () => busy });
+    await postRun(ctx, { notification: 'error' });
+    await handleCoreChatRoutes(ctx, makeReq({}), makeRes(), 'POST', '/api/core-chat/runs/run-1/cancel');
+    busy = false;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(executeApiTask).not.toHaveBeenCalled();
+  });
+
+  it('keeps cancellation latched when stop throws', async () => {
+    const executeApiTask = vi.fn().mockResolvedValueOnce({ success: false }).mockImplementation(() => new Promise(() => {}));
+    const ctx = makeCtx({ executeApiTask, stopChatTask: () => { throw new Error('stop failed'); } });
+    await openCoreCircuit(ctx);
+    await postRun(ctx);
+    const res = makeRes();
+    await expect(handleCoreChatRoutes(ctx, makeReq({}), res, 'POST', '/api/core-chat/runs/run-1/cancel')).resolves.toBe(true);
+    expect(res.json()).toMatchObject({ status: 'canceled', stopped: false });
+    expect((await postRun(ctx, { runId: 'new-probe' })).statusCode).toBe(202);
+  });
+
+  it('abandons a steered notification without counting it as backend recovery', async () => {
+    const executeApiTask = vi.fn().mockResolvedValueOnce({ success: false }).mockResolvedValue({ success: true });
+    const ctx = makeCtx({ executeApiTask, isBusy: () => true, steerAgentNotification: async () => true });
+    await openCoreCircuit(ctx);
+    await postRun(ctx, { notification: 'result' });
+    await eventually(() => expect(vi.mocked(fetch).mock.calls.some(call => {
+      const event = JSON.parse(call[1]?.body as string);
+      return event.runId === 'run-1' && event.type === 'complete';
+    })).toBe(true));
+    expect((await postRun(ctx, { runId: 'probe' })).statusCode).toBe(202);
+    await eventually(() => expect(executeApiTask).toHaveBeenCalledTimes(2));
+    expect(ctx.circuitBreaker.getStatus().metabot.state).toBe('half-open');
+  });
+
+  it('abandons setup when the bot disappears after admission', async () => {
+    const executeApiTask = vi.fn().mockResolvedValueOnce({ success: false }).mockResolvedValue({ success: true });
+    const bridge = { executeApiTask };
+    const ctx = makeCtx(bridge);
+    await openCoreCircuit(ctx);
+    const get = vi.spyOn(ctx.registry, 'get');
+    get.mockReturnValueOnce({ bridge } as any).mockReturnValueOnce(undefined);
+    await postRun(ctx);
+    expect((await postRun(ctx, { runId: 'probe' })).statusCode).toBe(202);
+    await eventually(() => expect(executeApiTask).toHaveBeenCalledTimes(2));
+  });
+
+  it('settles thrown core primary execution as failure', async () => {
+    const executeApiTask = vi.fn().mockResolvedValueOnce({ success: false }).mockRejectedValueOnce(new Error('provider failed'));
+    const ctx = makeCtx({ executeApiTask });
+    await openCoreCircuit(ctx);
+    await postRun(ctx);
+    await eventually(() => expect(ctx.circuitBreaker.getStatus().metabot).toEqual({ state: 'open', failures: 2 }));
+  });
+
+  it('does not fail primary health when the final callback exhausts retries', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const executeApiTask = vi.fn().mockResolvedValueOnce({ success: false }).mockResolvedValue({ success: true });
+    const ctx = makeCtx({ executeApiTask });
+    const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+    await postRun(ctx, { runId: 'seed-failure' });
+    await vi.advanceTimersByTimeAsync(0);
+    now.mockReturnValue(1000);
+    vi.mocked(fetch).mockImplementation(async (_url, options) => {
+      if (JSON.parse(options?.body as string).type === 'complete') throw new Error('callback disconnected');
+      return { ok: true, status: 200 } as Response;
+    });
+    await postRun(ctx);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(ctx.circuitBreaker.getStatus().metabot).toEqual({ state: 'half-open', failures: 1 });
+    expect((await postRun(ctx, { runId: 'new-probe' })).statusCode).toBe(202);
+    await vi.advanceTimersByTimeAsync(1000);
   });
 
   it('rejects unknown bots without peer forwarding', async () => {

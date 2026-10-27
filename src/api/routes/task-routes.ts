@@ -1,6 +1,7 @@
 import type * as http from 'node:http';
 import { jsonResponse, parseJsonBody } from './helpers.js';
 import type { RouteContext } from './types.js';
+import type { ApiTaskOptions } from '../../bridge/message-bridge.js';
 
 export async function handleTaskRoutes(
   ctx: RouteContext,
@@ -103,112 +104,122 @@ export async function handleTaskRoutes(
         return true;
       }
 
-      logger.info({ botName, chatId, promptLength: prompt.length, asyncMode }, 'API talk request');
-
-      // Async mode: accept immediately, execute in background
-      if (asyncMode) {
-        const asyncTask = asyncTaskStore.create({
-          botName, chatId, prompt, callbackChatId, callbackBotName,
-        });
-
-        (async () => {
-          asyncTaskStore.update(asyncTask.id, { status: 'running' });
-          try {
-            const result = await bot.bridge.executeApiTask({
-              prompt, chatId, userId: 'api', sendCards: sendCards ?? true,
-            });
-            asyncTaskStore.update(asyncTask.id, {
-              status: result.success ? 'completed' : 'failed',
-              completedAt: Date.now(),
-              result: {
-                success: result.success,
-                responseText: result.responseText,
-                costUsd: result.costUsd,
-                durationMs: result.durationMs,
-                error: result.error,
-              },
-            });
-
-            if (result.success) {
-              circuitBreaker.recordSuccess(botName);
-            } else {
-              circuitBreaker.recordFailure(botName);
-            }
-            if (result.costUsd) {
-              budgetManager.recordCost(botName, result.costUsd);
-            }
-
-            // Send callback if configured
-            if (callbackChatId && callbackBotName) {
-              const callbackBot = registry.get(callbackBotName);
-              if (callbackBot) {
-                const summary = result.responseText?.slice(0, 500) || 'Task completed';
-                await callbackBot.bridge.executeApiTask({
-                  prompt: `[Async task callback] Bot "${botName}" finished a task. Result: ${summary}`,
-                  chatId: callbackChatId,
-                  userId: 'system',
-                  sendCards: true,
-                  maxTurns: 1,
-                });
-              }
-            }
-          } catch (err: any) {
-            circuitBreaker.recordFailure(botName);
-            asyncTaskStore.update(asyncTask.id, {
-              status: 'failed',
-              completedAt: Date.now(),
-              result: { success: false, responseText: '', error: err.message },
-            });
-          }
-        })();
-
-        jsonResponse(res, 202, {
-          taskId: asyncTask.id,
-          status: 'accepted',
-          message: 'Task accepted for async execution',
-        });
+      const admission = circuitBreaker.tryAcquire(botName);
+      if (!admission) {
+        jsonResponse(res, 503, { error: `Bot "${botName}" is temporarily unavailable (circuit open)` });
         return true;
       }
+      try {
+        const executePrimary = async (options: ApiTaskOptions) => {
+          let result;
+          try {
+            result = await bot.bridge.executeApiTask(options);
+          } catch (err) {
+            admission.settle('failure');
+            throw err;
+          }
+          admission.settle(result.execution === 'not-started' ? 'abandoned' : result.success ? 'success' : 'failure');
+          return result;
+        };
+        logger.info({ botName, chatId, promptLength: prompt.length, asyncMode }, 'API talk request');
 
-      // Sync mode with optional WS streaming
-      const subs = ws.handle?.subscriptions;
-      const hasWsSubscribers = subs && (subs.getSubscribers(chatId)?.size ?? 0) > 0;
+        if (asyncMode) {
+          const asyncTask = asyncTaskStore.create({
+            botName, chatId, prompt, callbackChatId, callbackBotName,
+          });
 
-      // Detect grouptalk chatId pattern: grouptalk-{groupId}-{botName}
-      const grouptalkMatch = chatId.match(/^grouptalk-(.+)-[^-]+$/);
-      const grouptalkGroupId = grouptalkMatch ? grouptalkMatch[1] : undefined;
+          void (async () => {
+            try {
+              asyncTaskStore.update(asyncTask.id, { status: 'running' });
+              const result = await executePrimary({
+                prompt, chatId, userId: 'api', sendCards: sendCards ?? true,
+              });
+              asyncTaskStore.update(asyncTask.id, {
+                status: result.success ? 'completed' : 'failed',
+                completedAt: Date.now(),
+                result: {
+                  success: result.success,
+                  responseText: result.responseText,
+                  costUsd: result.costUsd,
+                  durationMs: result.durationMs,
+                  error: result.error,
+                },
+              });
+              if (result.costUsd) {
+                budgetManager.recordCost(botName, result.costUsd);
+              }
 
-      const result = await bot.bridge.executeApiTask({
-        prompt,
-        chatId,
-        userId: 'api',
-        sendCards: sendCards ?? true,
-        ...(hasWsSubscribers ? {
-          onUpdate: (state, bridgeMessageId, final) => {
-            const msgType = final ? 'complete' : 'state';
-            subs!.broadcast(chatId, {
-              type: msgType,
-              chatId,
-              messageId: bridgeMessageId,
-              state,
-              botName,
-              ...(grouptalkGroupId ? { groupId: grouptalkGroupId } : {}),
-            });
-          },
-        } : {}),
-      });
+              if (callbackChatId && callbackBotName) {
+                const callbackBot = registry.get(callbackBotName);
+                if (callbackBot) {
+                  const summary = result.responseText?.slice(0, 500) || 'Task completed';
+                  await callbackBot.bridge.executeApiTask({
+                    prompt: `[Async task callback] Bot "${botName}" finished a task. Result: ${summary}`,
+                    chatId: callbackChatId,
+                    userId: 'system',
+                    sendCards: true,
+                    maxTurns: 1,
+                  });
+                }
+              }
+            } catch (err: any) {
+              asyncTaskStore.update(asyncTask.id, {
+                status: 'failed',
+                completedAt: Date.now(),
+                result: { success: false, responseText: '', error: err.message },
+              });
+            } finally {
+              admission.settle('abandoned');
+            }
+          })().catch((err) => {
+            logger.error({ err, taskId: asyncTask.id, botName }, 'Async task finalization failed');
+          });
 
-      if (result.success) {
-        circuitBreaker.recordSuccess(botName);
-      } else {
-        circuitBreaker.recordFailure(botName);
+          jsonResponse(res, 202, {
+            taskId: asyncTask.id,
+            status: 'accepted',
+            message: 'Task accepted for async execution',
+          });
+          return true;
+        }
+
+        const subs = ws.handle?.subscriptions;
+        const hasWsSubscribers = subs && (subs.getSubscribers(chatId)?.size ?? 0) > 0;
+        const grouptalkMatch = chatId.match(/^grouptalk-(.+)-[^-]+$/);
+        const grouptalkGroupId = grouptalkMatch ? grouptalkMatch[1] : undefined;
+
+        const result = await executePrimary({
+          prompt,
+          chatId,
+          userId: 'api',
+          sendCards: sendCards ?? true,
+          ...(hasWsSubscribers ? {
+            onUpdate: (state, bridgeMessageId, final) => {
+              try {
+                subs.broadcast(chatId, {
+                  type: final ? 'complete' : 'state',
+                  chatId,
+                  messageId: bridgeMessageId,
+                  state,
+                  botName,
+                  ...(grouptalkGroupId ? { groupId: grouptalkGroupId } : {}),
+                });
+              } catch (err) {
+                logger.warn({ err, botName, chatId }, 'Task streaming delivery failed');
+              }
+            },
+          } : {}),
+        });
+        if (result.costUsd) {
+          budgetManager.recordCost(botName, result.costUsd);
+        }
+
+        jsonResponse(res, result.success ? 200 : 500, result);
+        return true;
+      } catch (err) {
+        admission.settle('abandoned');
+        throw err;
       }
-      if (result.costUsd) {
-        budgetManager.recordCost(botName, result.costUsd);
-      }
-
-      jsonResponse(res, result.success ? 200 : 500, result);
-      return true;
     }
 
     // Bot not found locally — check peers

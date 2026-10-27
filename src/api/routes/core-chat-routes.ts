@@ -2,6 +2,7 @@ import type * as http from 'node:http';
 import { jsonResponse, parseJsonBody } from './helpers.js';
 import type { RouteContext } from './types.js';
 import type { ApiTaskResult } from '../../bridge/message-bridge.js';
+import type { CircuitAdmission } from '../circuit-breaker.js';
 import type { OutputFile } from '../../bridge/outputs-manager.js';
 import type { EngineName } from '../../engines/index.js';
 import type { CardState, PendingQuestion } from '../../types.js';
@@ -28,6 +29,8 @@ interface CoreChatRunRecord {
   executionChatId: string;
   eventCallbackUrl: string;
   status: CoreChatRunStatus;
+  admission: CircuitAdmission;
+  execution: 'pending' | 'executing' | 'finished';
   dispatcher?: CoreChatEventDispatcher;
   pendingQuestion?: PendingCoreChatQuestion;
 }
@@ -299,10 +302,9 @@ class CoreChatEventDispatcher {
   }
 }
 
-function waitForCoreChatAnswer(runId: string, toolUseId: string): Promise<string> {
+function waitForCoreChatAnswer(record: CoreChatRunRecord, toolUseId: string): Promise<string> {
   return new Promise((resolve) => {
-    const record = activeCoreChatRuns.get(runId);
-    if (!record || record.status !== 'running') {
+    if (record.status !== 'running') {
       resolve(questionAnswerJson('The run is no longer active. Stop safely.'));
       return;
     }
@@ -311,16 +313,12 @@ function waitForCoreChatAnswer(runId: string, toolUseId: string): Promise<string
       record.pendingQuestion.resolve(questionAnswerJson('A newer question replaced this one. Continue safely.'));
     }
     const timeout = setTimeout(() => {
-      const current = activeCoreChatRuns.get(runId);
-      if (!current?.pendingQuestion || current.pendingQuestion.toolUseId !== toolUseId) return;
-      activeCoreChatRuns.set(runId, { ...current, pendingQuestion: undefined });
+      if (record.pendingQuestion?.toolUseId !== toolUseId) return;
+      record.pendingQuestion = undefined;
       resolve(questionAnswerJson('No browser answer arrived before timeout. Use your safest reasonable default and continue.'));
     }, questionTimeoutMs());
     timeout.unref?.();
-    activeCoreChatRuns.set(runId, {
-      ...record,
-      pendingQuestion: { toolUseId, resolve, timeout },
-    });
+    record.pendingQuestion = { toolUseId, resolve, timeout };
   });
 }
 
@@ -338,7 +336,7 @@ export function answerCoreChatRun(
     return { status: 409, body: { runId, status: 'question_not_pending', answered: false } };
   }
   clearTimeout(pending.timeout);
-  activeCoreChatRuns.set(runId, { ...record, pendingQuestion: undefined });
+  record.pendingQuestion = undefined;
   pending.resolve(questionAnswerJson(answer));
   return { status: 200, body: { runId, status: 'answered', answered: true } };
 }
@@ -352,26 +350,39 @@ export async function cancelCoreChatRun(
     return { status: 200, body: { runId, status: 'not_running', stopped: false } };
   }
 
-  if (record.pendingQuestion) {
-    clearTimeout(record.pendingQuestion.timeout);
-    record.pendingQuestion.resolve(questionAnswerJson('The user canceled this run. Stop now.'));
+  record.status = 'canceled';
+  record.admission.settle('abandoned');
+  const pending = record.pendingQuestion;
+  record.pendingQuestion = undefined;
+  if (pending) {
+    clearTimeout(pending.timeout);
+    pending.resolve(questionAnswerJson('The user canceled this run. Stop now.'));
   }
-  const bot = ctx.registry.get(record.targetBot);
-  const stopped = bot?.bridge.stopChatTask(record.executionChatId) ?? false;
-  const status = stopped ? 'canceled' : 'failed';
-  activeCoreChatRuns.set(runId, { ...record, status, pendingQuestion: undefined });
-  if (stopped && record.dispatcher) {
-    await record.dispatcher.send('error', {
-      final: true,
-      status: 'canceled',
-      error: 'Canceled by user',
-    });
+  let stopped = false;
+  if (record.execution === 'executing') {
+    try {
+      const bot = ctx.registry.get(record.targetBot);
+      stopped = bot?.bridge.stopChatTask(record.executionChatId) ?? false;
+    } catch (err) {
+      ctx.logger.warn({ err, runId }, 'Core chat cancellation stop failed');
+    }
+  }
+  if (record.dispatcher) {
+    try {
+      await record.dispatcher.send('error', {
+        final: true,
+        status: 'canceled',
+        error: 'Canceled by user',
+      });
+    } catch (err) {
+      ctx.logger.warn({ err, runId }, 'Core chat cancellation callback failed');
+    }
   }
   return {
     status: 200,
     body: {
       runId,
-      status: stopped ? 'canceled' : 'not_running',
+      status: 'canceled',
       stopped,
       executionChatId: record.executionChatId,
       targetBot: record.targetBot,
@@ -395,11 +406,9 @@ function outputFilePayload(files: OutputFile[]): Record<string, unknown> {
   };
 }
 
-function updateRunTerminalStatus(runId: string, status: Exclude<CoreChatRunStatus, 'running'>): void {
-  const current = activeCoreChatRuns.get(runId);
-  if (!current) return;
-  if (current.status === 'canceled') return;
-  activeCoreChatRuns.set(runId, { ...current, status });
+function updateRunTerminalStatus(record: CoreChatRunRecord, status: Exclude<CoreChatRunStatus, 'running'>): void {
+  if (record.status === 'canceled') return;
+  record.status = status;
 }
 
 function terminalErrorFromState(state: CardState): string | undefined {
@@ -542,139 +551,158 @@ function voiceRunPayload(ctx: RouteContext, request: CoreChatRunRequest, respons
   };
 }
 
-async function runCoreChatTask(ctx: RouteContext, request: CoreChatRunRequest, executionChatId: string): Promise<void> {
-  const { registry, logger, circuitBreaker, budgetManager } = ctx;
-  const bot = registry.get(request.targetBot);
-  if (!bot) return;
-
-  const dispatcher = new CoreChatEventDispatcher(
-    request.eventCallbackUrl,
-    request.runId,
-    request.targetBot,
-    executionChatId,
-    logger,
-  );
-  const activeRecord = activeCoreChatRuns.get(request.runId);
-  if (activeRecord) activeCoreChatRuns.set(request.runId, { ...activeRecord, dispatcher });
-
-  let finalState: CardState | undefined;
-  let finalMessageId: string | undefined;
-
+async function runCoreChatTask(ctx: RouteContext, request: CoreChatRunRequest, record: CoreChatRunRecord): Promise<void> {
   try {
-    dispatcher.enqueue('state', {
-      final: false,
-      state: {
-        status: 'running',
-        userPrompt: request.prompt,
-        responseText: '',
-        toolCalls: [],
-      },
-    });
-
-    if (request.voice?.announceCapabilities) {
-      dispatcher.enqueue('log', voiceRunPayload(ctx, request));
-    }
-
-    let steered = false;
-    if (request.notification) {
-      const deadline = Date.now() + 5 * 60_000;
-      while (bot.bridge.isBusy(executionChatId)) {
-        if (activeCoreChatRuns.get(request.runId)?.status === 'canceled') return;
-        steered = request.notification === 'result'
-          && await bot.bridge.steerAgentNotification(executionChatId, request.prompt);
-        if (steered) break;
-        if (Date.now() >= deadline) throw new Error('Notification origin remained busy; result is available in session history');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    }
-    if (activeCoreChatRuns.get(request.runId)?.status === 'canceled') return;
-    const result: ApiTaskResult = steered
-      ? { success: true, responseText: 'Agent Bus notification delivered to the active turn.' }
-      : await bot.bridge.executeApiTask({
-      prompt: request.prompt,
-      chatId: executionChatId,
-      userId: request.userId ?? 'core-chat',
-      sendCards: false,
-      engine: request.engine,
-      model: request.model,
-      maxTurns: request.maxTurns,
-      allowedTools: request.allowedTools,
-      groupId: request.metadata?.groupId,
-      groupMembers: request.metadata?.groupMembers,
-      onUpdate: (state, bridgeMessageId, final) => {
-        if (final) {
-          finalState = state;
-          finalMessageId = bridgeMessageId;
-          return;
-        }
-        const terminalError = terminalErrorFromState(state);
-        if (terminalError) {
-          finalState = state;
-          finalMessageId = bridgeMessageId;
-          dispatcher.enqueue('error', {
-            messageId: bridgeMessageId,
-            final: true,
-            state,
-            error: terminalError,
-          });
-          throw new CoreChatTerminalStateError(terminalError, state, bridgeMessageId);
-        }
-        dispatcher.enqueue('state', { messageId: bridgeMessageId, final: false, state });
-      },
-      onQuestion: async (question: PendingQuestion) => {
-        await dispatcher.send('question', {
-          toolUseId: question.toolUseId,
-          question,
-          autoAnswer: false,
-        });
-        return waitForCoreChatAnswer(request.runId, question.toolUseId);
-      },
-      onOutputFiles: (files) => {
-        if (files.length > 0) {
-          dispatcher.enqueue('file', outputFilePayload(files));
-        }
-      },
-    });
-
-    if (activeCoreChatRuns.get(request.runId)?.status === 'canceled') return;
-
-    if (result.success) {
-      circuitBreaker.recordSuccess(request.targetBot);
-    } else {
-      circuitBreaker.recordFailure(request.targetBot);
-    }
-    if (result.costUsd) {
-      budgetManager.recordCost(request.targetBot, result.costUsd);
-    }
-
-    await dispatcher.drain();
-    if (request.voice?.tts && result.responseText) {
-      await dispatcher.send('log', voiceRunPayload(ctx, request, result.responseText));
-    }
-    await dispatcher.send(result.success ? 'complete' : 'error', {
-      messageId: finalMessageId,
-      final: true,
-      state: finalState,
-      result: apiTaskResultPayload(result),
-      ...(result.error ? { error: result.error } : {}),
-    });
-
-    updateRunTerminalStatus(request.runId, result.success ? 'completed' : 'failed');
-  } catch (err: any) {
-    if (activeCoreChatRuns.get(request.runId)?.status === 'canceled') return;
-    circuitBreaker.recordFailure(request.targetBot);
-    await dispatcher.drain();
-    if (err instanceof CoreChatTerminalStateError) {
-      updateRunTerminalStatus(request.runId, 'failed');
+    const { registry, logger, budgetManager } = ctx;
+    const { executionChatId, admission } = record;
+    const bot = registry.get(request.targetBot);
+    if (!bot) {
+      updateRunTerminalStatus(record, 'failed');
       return;
     }
-    await dispatcher.send('error', {
-      messageId: finalMessageId,
-      final: true,
-      state: finalState,
-      error: err?.message || 'Task execution failed',
-    });
-    updateRunTerminalStatus(request.runId, 'failed');
+
+    const dispatcher = new CoreChatEventDispatcher(
+      request.eventCallbackUrl,
+      request.runId,
+      request.targetBot,
+      executionChatId,
+      logger,
+    );
+    record.dispatcher = dispatcher;
+
+    let finalState: CardState | undefined;
+    let finalMessageId: string | undefined;
+
+    try {
+      dispatcher.enqueue('state', {
+        final: false,
+        state: {
+          status: 'running',
+          userPrompt: request.prompt,
+          responseText: '',
+          toolCalls: [],
+        },
+      });
+
+      if (request.voice?.announceCapabilities) {
+        dispatcher.enqueue('log', voiceRunPayload(ctx, request));
+      }
+
+      let steered = false;
+      if (request.notification) {
+        const deadline = Date.now() + 5 * 60_000;
+        while (bot.bridge.isBusy(executionChatId)) {
+          if (record.status !== 'running') return;
+          steered = request.notification === 'result'
+            && await bot.bridge.steerAgentNotification(executionChatId, request.prompt);
+          if (steered) break;
+          if (Date.now() >= deadline) throw new Error('Notification origin remained busy; result is available in session history');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+      if (record.status !== 'running') return;
+      let result: ApiTaskResult;
+      if (steered) {
+        admission.settle('abandoned');
+        result = { success: true, responseText: 'Agent Bus notification delivered to the active turn.' };
+      } else {
+        record.execution = 'executing';
+        try {
+          result = await bot.bridge.executeApiTask({
+            prompt: request.prompt,
+            chatId: executionChatId,
+            userId: request.userId ?? 'core-chat',
+            sendCards: false,
+            engine: request.engine,
+            model: request.model,
+            maxTurns: request.maxTurns,
+            allowedTools: request.allowedTools,
+            groupId: request.metadata?.groupId,
+            groupMembers: request.metadata?.groupMembers,
+            onUpdate: (state, bridgeMessageId, final) => {
+              if (final) {
+                finalState = state;
+                finalMessageId = bridgeMessageId;
+                return;
+              }
+              const terminalError = terminalErrorFromState(state);
+              if (terminalError) {
+                finalState = state;
+                finalMessageId = bridgeMessageId;
+                dispatcher.enqueue('error', {
+                  messageId: bridgeMessageId,
+                  final: true,
+                  state,
+                  error: terminalError,
+                });
+                throw new CoreChatTerminalStateError(terminalError, state, bridgeMessageId);
+              }
+              dispatcher.enqueue('state', { messageId: bridgeMessageId, final: false, state });
+            },
+            onQuestion: async (question: PendingQuestion) => {
+              try {
+                await dispatcher.send('question', {
+                  toolUseId: question.toolUseId,
+                  question,
+                  autoAnswer: false,
+                });
+              } catch (err) {
+                admission.settle('abandoned');
+                throw err;
+              }
+              return waitForCoreChatAnswer(record, question.toolUseId);
+            },
+            onOutputFiles: (files) => {
+              if (files.length > 0) {
+                dispatcher.enqueue('file', outputFilePayload(files));
+              }
+            },
+          });
+        } catch (err) {
+          admission.settle('failure');
+          throw err;
+        } finally {
+          record.execution = 'finished';
+        }
+        admission.settle(result.execution === 'not-started' ? 'abandoned' : result.success ? 'success' : 'failure');
+      }
+
+      if (record.status !== 'running') return;
+      if (result.costUsd) {
+        budgetManager.recordCost(request.targetBot, result.costUsd);
+      }
+
+      await dispatcher.drain();
+      if (request.voice?.tts && result.responseText) {
+        await dispatcher.send('log', voiceRunPayload(ctx, request, result.responseText));
+      }
+      await dispatcher.send(result.success ? 'complete' : 'error', {
+        messageId: finalMessageId,
+        final: true,
+        state: finalState,
+        result: apiTaskResultPayload(result),
+        ...(result.error ? { error: result.error } : {}),
+      });
+
+      updateRunTerminalStatus(record, result.success ? 'completed' : 'failed');
+    } catch (err: any) {
+      admission.settle('abandoned');
+      if (record.status !== 'running') return;
+      await dispatcher.drain();
+      if (err instanceof CoreChatTerminalStateError) {
+        updateRunTerminalStatus(record, 'failed');
+        return;
+      }
+      await dispatcher.send('error', {
+        messageId: finalMessageId,
+        final: true,
+        state: finalState,
+        error: err?.message || 'Task execution failed',
+      });
+      updateRunTerminalStatus(record, 'failed');
+    }
+  } finally {
+    record.admission.settle('abandoned');
   }
 }
 
@@ -702,19 +730,31 @@ export function acceptCoreChatRun(ctx: RouteContext, request: CoreChatRunRequest
   if (activeCoreChatRuns.get(request.runId)?.status === 'running') {
     return { status: 409, body: { error: `Run already active: ${request.runId}` } };
   }
-  activeCoreChatRuns.set(request.runId, {
-    runId: request.runId,
-    targetBot: request.targetBot,
-    executionChatId,
-    eventCallbackUrl: request.eventCallbackUrl,
-    status: 'running',
-  });
+  const admission = circuitBreaker.tryAcquire(request.targetBot);
+  if (!admission) {
+    return { status: 503, body: { error: `Bot "${request.targetBot}" is temporarily unavailable (circuit open)` } };
+  }
+  try {
+    const record: CoreChatRunRecord = {
+      runId: request.runId,
+      targetBot: request.targetBot,
+      executionChatId,
+      eventCallbackUrl: request.eventCallbackUrl,
+      status: 'running',
+      admission,
+      execution: 'pending',
+    };
+    activeCoreChatRuns.set(request.runId, record);
 
-  logger.info({ runId: request.runId, targetBot: request.targetBot, executionChatId }, 'Core chat run accepted');
-  void runCoreChatTask(ctx, request, executionChatId).catch((err) => {
-    logger.error({ err, runId: request.runId, targetBot: request.targetBot }, 'Core chat run failed outside task handler');
-    updateRunTerminalStatus(request.runId, 'failed');
-  });
+    logger.info({ runId: request.runId, targetBot: request.targetBot, executionChatId }, 'Core chat run accepted');
+    void runCoreChatTask(ctx, request, record).catch((err) => {
+      logger.error({ err, runId: request.runId, targetBot: request.targetBot }, 'Core chat run failed outside task handler');
+      updateRunTerminalStatus(record, 'failed');
+    });
+  } catch (err) {
+    admission.settle('abandoned');
+    throw err;
+  }
 
   return {
     status: 202,

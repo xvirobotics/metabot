@@ -168,6 +168,7 @@ export interface ApiTaskOptions {
 }
 
 export interface ApiTaskResult {
+  execution?: 'not-started';
   success: boolean;
   responseText: string;
   sessionId?: string;
@@ -2944,11 +2945,12 @@ export class MessageBridge {
         success: false,
         responseText: '',
         error: `Bridge is preparing controlled restart ${this.restartQuiesceRequestId}`,
+        execution: 'not-started',
       };
     }
     const startingTask = this.reserveTaskStart(chatId, options.prompt, 'api', options.sendCards === true);
     if (!startingTask) {
-      return { success: false, responseText: '', error: 'Chat is busy with another task' };
+      return { success: false, responseText: '', error: 'Chat is busy with another task', execution: 'not-started' };
     }
     try {
       return await this.executeReservedApiTask(options, startingTask);
@@ -2983,7 +2985,7 @@ export class MessageBridge {
     if (!this.isChatBusy(options.chatId)) {
       try { this.outputsManager.cleanup(outputsDir); } catch { /* ignore */ }
     }
-    return { success: false, responseText: '', error: state.errorMessage };
+    return { success: false, responseText: '', error: state.errorMessage, execution: 'not-started' };
   }
 
   private async executeReservedApiTask(
