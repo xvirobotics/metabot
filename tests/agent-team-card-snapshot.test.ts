@@ -60,8 +60,8 @@ describe('buildAgentTeamCardSnapshot', () => {
       { taskId: '1', subject: 'Open implementation', status: 'in_progress', teammate: 'lead' },
     ]);
     expect(snapshot.backgroundEvents).toEqual([
-      { taskId: 'run-failed-open', description: 'lead: Open implementation', status: 'failed', lastEvent: 'needs retry' },
-      { taskId: 'run-running', description: 'lead: Open implementation', status: 'running', lastEvent: 'working' },
+      { kind: 'work', taskId: 'run-failed-open', description: 'lead: Open implementation', status: 'failed', lastEvent: 'needs retry' },
+      { kind: 'work', taskId: 'run-running', description: 'lead: Open implementation', status: 'running', lastEvent: 'working' },
     ]);
   });
 });

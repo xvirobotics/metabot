@@ -17,6 +17,7 @@ import { DEFAULT_CODEX_GOAL_MAX_ITERATIONS } from '../src/engines/index.js';
 import { classifyBurstSource } from '../src/engines/claude/persistent-executor.js';
 import type { BotConfigBase } from '../src/config.js';
 import type { CardState } from '../src/types.js';
+import { AgentTeamStore } from '../src/agent-teams/team-store.js';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -559,6 +560,206 @@ describe('MessageBridge between-turn questions', () => {
     ]);
     expect(sender.updated.at(-1)?.state.status).toBe('complete');
     expect(sender.updated.at(-1)?.state.responseText).toBe('> **Reply:** Red, Because it is visible');
+  });
+});
+
+describe('PR415 final lifecycle', () => {
+  it.each(['chat', 'api'] as const)('uses uncapped team liveness for %s card, activity and audit', async (source) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pr415-team-'));
+    const store = new AgentTeamStore(mockLogger, path.join(dir, 'teams.db'));
+    const sender = makeSender();
+    sender.sendText = vi.fn(async () => {});
+    const bridge = new MessageBridge(makeCodexConfig(), mockLogger, sender as any) as any;
+    const activity = vi.fn();
+    bridge.onActivityEvent = activity;
+    bridge.audit.log = vi.fn();
+    const onUpdate = vi.fn();
+    store.createTeam('demo', undefined, { displayChatIds: ['chat-1'] });
+    let createdAt = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => createdAt++);
+    store.createRun('demo', { agentName: 'live' });
+    for (let i = 0; i < 5; i++) {
+      const task = store.createTask('demo', { subject: `failed ${i}` });
+      store.createRun('demo', { taskId: task.id, status: 'failed', error: 'failed' });
+    }
+    clock.mockRestore();
+    bridge.setAgentTeamStore(store);
+    const status = vi.spyOn(store, 'status');
+    bridge.runOneTurn = vi.fn(async () => ({
+      stream: (async function* () {
+        status.mockClear();
+        vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 20_000);
+        yield { type: 'result', subtype: 'success', result: 'done' };
+      })(),
+      finish() {}, resolveQuestion() {},
+    }));
+    try {
+      if (source === 'chat') {
+        await bridge.handleMessage({ messageId: 'm1', chatId: 'chat-1', chatType: 'private', userId: 'u1', text: 'work' });
+      } else {
+        expect((await bridge.executeApiTask({ prompt: 'work', chatId: 'chat-1', sendCards: true, onUpdate })).success).toBe(true);
+      }
+      const final = sender.updated.at(-1)?.state;
+      expect(final?.backgroundEvents).toHaveLength(5);
+      expect(final?.backgroundEvents?.every(event => event.status === 'failed')).toBe(true);
+      expect(final?.hasRunningBackgroundWork).toBe(true);
+      expect(activity.mock.calls.at(-1)?.[0].type).toBe('task_waiting');
+      expect(bridge.audit.log.mock.calls.at(-1)?.[0].event).toBe(source === 'chat' ? 'task_waiting' : 'api_task_waiting');
+      expect(status).toHaveBeenCalledTimes(1);
+      expect(sender.sendText).not.toHaveBeenCalled();
+      if (source === 'api') expect(onUpdate.mock.calls.at(-1)?.[0]).toBe(final);
+    } finally {
+      vi.restoreAllMocks();
+      bridge.destroy();
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['information', 'success', 'chat', 'task_completed', '✅ Done'],
+    ['work', 'success', 'chat', 'task_waiting', undefined],
+    ['work', 'error', 'chat', 'task_failed', '❌ Failed'],
+    ['information', 'success', 'api', 'task_completed', undefined],
+    ['work', 'success', 'api', 'task_waiting', undefined],
+    ['work', 'error', 'api', 'task_failed', undefined],
+  ] as const)('classifies %s events on %s via %s without description heuristics', async (kind, outcome, source, activityType, notice) => {
+    const sender = makeSender();
+    sender.sendText = vi.fn(async () => {});
+    const bridge = new MessageBridge(makeCodexConfig(), mockLogger, sender as any) as any;
+    const activity = vi.fn();
+    bridge.onActivityEvent = activity;
+    bridge.audit.log = vi.fn();
+    bridge.runOneTurn = vi.fn(async () => ({
+      stream: (async function* () {
+        yield kind === 'work'
+          ? { type: 'system', subtype: 'task_started', task_id: 'live', description: 'Codex notification' }
+          : { type: 'task_notification', session_id: 'info', result: 'rate limited' };
+        vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 20_000);
+        yield outcome === 'success'
+          ? { type: 'result', subtype: 'success', result: 'done' }
+          : { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['failed'] };
+      })(),
+      finish() {}, resolveQuestion() {},
+    }));
+    try {
+      if (source === 'chat') {
+        await bridge.handleMessage({ messageId: 'm1', chatId: 'chat-1', chatType: 'private', userId: 'u1', text: 'work' });
+      } else {
+        await bridge.executeApiTask({ prompt: 'work', chatId: 'chat-1', sendCards: true });
+        expect(bridge.audit.log.mock.calls.at(-1)?.[0].event).toBe(outcome === 'error'
+          ? 'api_task_error' : kind === 'work' ? 'api_task_waiting' : 'api_task_complete');
+      }
+      expect(activity.mock.calls.at(-1)?.[0].type).toBe(activityType);
+      if (notice) expect(sender.sendText).toHaveBeenCalledWith('chat-1', notice);
+      else expect(sender.sendText).not.toHaveBeenCalled();
+      expect(sender.updated.at(-1)?.state.backgroundEvents?.[0].kind).toBe(kind);
+    } finally {
+      vi.restoreAllMocks();
+      bridge.destroy();
+    }
+  });
+
+  it.each(['chat', 'api'] as const)('preserves timeout failure with running work via %s', async (source) => {
+    const sender = makeSender();
+    sender.sendText = vi.fn(async () => {});
+    const bridge = new MessageBridge(makeCodexConfig(), mockLogger, sender as any) as any;
+    const activity = vi.fn();
+    bridge.onActivityEvent = activity;
+    bridge.audit.log = vi.fn();
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    const onUpdate = vi.fn();
+    bridge.runOneTurn = vi.fn(async () => ({
+      stream: (async function* () {
+        yield { type: 'system', subtype: 'task_started', task_id: 'live', description: 'monitor' };
+        const timeout = timers.mock.calls.find(([, delay]) => delay === 24 * 60 * 60 * 1000)?.[0];
+        expect(timeout).toBeTypeOf('function');
+        if (typeof timeout === 'function') timeout();
+        vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 20_000);
+      })(),
+      finish() {}, resolveQuestion() {},
+    }));
+    try {
+      if (source === 'chat') {
+        await bridge.handleMessage({ messageId: 'm1', chatId: 'chat-1', chatType: 'private', userId: 'u1', text: 'work' });
+        expect(sender.sendText).toHaveBeenCalledWith('chat-1', '❌ Failed');
+      } else {
+        expect((await bridge.executeApiTask({ prompt: 'work', chatId: 'chat-1', sendCards: true, onUpdate })).success).toBe(false);
+        expect(onUpdate.mock.calls.at(-1)?.[0]).toBe(sender.updated.at(-1)?.state);
+      }
+      expect(sender.updated.at(-1)?.state.status).toBe('error');
+      expect(activity.mock.calls.at(-1)?.[0].type).toBe('task_failed');
+      expect(bridge.audit.log.mock.calls.at(-1)?.[0].event).toBe(source === 'chat' ? 'task_timeout' : 'api_task_timeout');
+    } finally {
+      vi.restoreAllMocks();
+      bridge.destroy();
+    }
+  });
+
+  it.each(['closed', 'throws'] as const)('retains last observed live team work when the store %s', async (failure) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pr415-unreadable-'));
+    const store = new AgentTeamStore(mockLogger, path.join(dir, 'teams.db'));
+    store.createTeam('demo', undefined, { displayChatIds: ['chat-1'] });
+    store.createRun('demo', { agentName: 'live' });
+    const sender = makeSender();
+    sender.sendText = vi.fn(async () => {});
+    const bridge = new MessageBridge(makeCodexConfig(), mockLogger, sender as any) as any;
+    bridge.setAgentTeamStore(store);
+    const activity = vi.fn();
+    bridge.onActivityEvent = activity;
+    bridge.runOneTurn = vi.fn(async () => ({
+      stream: (async function* () {
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'working' }] } };
+        if (failure === 'closed') store.close();
+        else vi.spyOn(store, 'status').mockImplementation(() => { throw new Error('unreadable'); });
+        vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 20_000);
+        yield { type: 'result', subtype: 'success', result: 'done' };
+      })(),
+      finish() {}, resolveQuestion() {},
+    }));
+    try {
+      await bridge.handleMessage({ messageId: 'm1', chatId: 'chat-1', chatType: 'private', userId: 'u1', text: 'work' });
+      expect(sender.updated.at(-1)?.state.hasRunningBackgroundWork).toBe(true);
+      expect(activity.mock.calls.at(-1)?.[0].type).toBe('task_waiting');
+      expect(sender.sendText).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      bridge.destroy();
+      if (!store.isClosed()) store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('tolerates a store closing during execution and retains hook work in final API state', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pr415-closed-'));
+    const store = new AgentTeamStore(mockLogger, path.join(dir, 'teams.db'));
+    const sender = makeSender();
+    const bridge = new MessageBridge(makeCodexConfig(), mockLogger, sender as any) as any;
+    bridge.setAgentTeamStore(store);
+    const onUpdate = vi.fn();
+    const activity = vi.fn();
+    bridge.onActivityEvent = activity;
+    bridge.runOneTurn = vi.fn(async (_chatId, _engine, opts) => ({
+      stream: (async function* () {
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'working' }] } };
+        opts.onTeamEvent({ kind: 'task_created', taskId: 'hook', subject: 'still working', teammate: 'worker' });
+        store.close();
+        yield { type: 'result', subtype: 'success', result: 'done' };
+      })(),
+      finish() {}, resolveQuestion() {},
+    }));
+    try {
+      expect((await bridge.executeApiTask({ prompt: 'work', chatId: 'chat-1', sendCards: true, onUpdate })).success).toBe(true);
+      const final = sender.updated.at(-1)?.state;
+      expect(final?.teamState?.tasks).toMatchObject([{ taskId: 'hook', status: 'in_progress' }]);
+      expect(final?.hasRunningBackgroundWork).toBe(true);
+      expect(activity.mock.calls.at(-1)?.[0].type).toBe('task_waiting');
+      expect(onUpdate.mock.calls.at(-1)?.[0]).toBe(final);
+    } finally {
+      bridge.destroy();
+      if (!store.isClosed()) store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

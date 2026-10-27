@@ -153,6 +153,7 @@ export class StreamProcessor {
     const lastEvent = summary ?? prior?.lastEvent;
 
     this._backgroundEvents.set(taskId, {
+      kind: 'work',
       taskId,
       description: description ?? prior?.description ?? 'background task',
       status,
@@ -166,6 +167,7 @@ export class StreamProcessor {
     if (!result) return;
     const taskId = typeof m.session_id === 'string' ? m.session_id : 'codex';
     this._backgroundEvents.set(taskId, {
+      kind: 'information',
       taskId,
       description: 'Codex notification',
       status: 'running',

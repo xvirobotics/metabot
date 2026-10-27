@@ -10,7 +10,7 @@ export interface AgentTeamStatusSnapshot {
   runs: TeamRun[];
 }
 
-export function buildAgentTeamCardSnapshot(snapshot: AgentTeamStatusSnapshot): Pick<CardState, 'teamState' | 'backgroundEvents'> {
+export function buildAgentTeamCardSnapshot(snapshot: AgentTeamStatusSnapshot): Pick<CardState, 'teamState' | 'backgroundEvents' | 'hasRunningBackgroundWork'> {
   const taskById = new Map(snapshot.tasks.map((task) => [task.id, task]));
   const teamState: TeamState = {
     name: snapshot.team.name,
@@ -38,6 +38,7 @@ export function buildAgentTeamCardSnapshot(snapshot: AgentTeamStatusSnapshot): P
       const who = run.agentName ? `${run.agentName}` : 'agent';
       const description = task ? `${who}: ${task.subject}` : `${who}: ${run.id}`;
       return {
+        kind: 'work',
         taskId: run.id,
         description,
         status: run.status,
@@ -46,6 +47,9 @@ export function buildAgentTeamCardSnapshot(snapshot: AgentTeamStatusSnapshot): P
     });
 
   return {
+    hasRunningBackgroundWork: snapshot.runs.some((run) => run.status === 'running')
+      || snapshot.tasks.some((task) => task.status === 'in_progress')
+      || snapshot.agents.some((agent) => agent.status === 'working'),
     teamState,
     ...(backgroundEvents.length > 0 ? { backgroundEvents } : {}),
   };

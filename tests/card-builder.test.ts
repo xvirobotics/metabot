@@ -190,8 +190,8 @@ describe('buildCard', () => {
       responseText: 'watching…',
       toolCalls: [],
       backgroundEvents: [
-        { taskId: 'bheol4172', description: 'Watching CI for PR #215', status: 'running', lastEvent: 'check (20) running' },
-        { taskId: 'bmkr16j6f', description: 'Watching deploy', status: 'completed', lastEvent: 'CI done: success' },
+        { kind: 'work', taskId: 'bheol4172', description: 'Watching CI for PR #215', status: 'running', lastEvent: 'check (20) running' },
+        { kind: 'work', taskId: 'bmkr16j6f', description: 'Watching deploy', status: 'completed', lastEvent: 'CI done: success' },
       ],
     };
     const json = JSON.parse(buildCard(state));

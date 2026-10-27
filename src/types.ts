@@ -32,13 +32,18 @@ export interface PendingQuestion {
 
 export type BackgroundTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
-export interface BackgroundEvent {
+type BackgroundEventDetails = {
   taskId: string;
   description: string;
   status: BackgroundTaskStatus;
   /** Latest stdout event line from the task, if any. */
   lastEvent?: string;
-}
+};
+
+export type BackgroundEvent = BackgroundEventDetails & (
+  | { kind: 'work' }
+  | { kind: 'information' }
+);
 
 /**
  * Snapshot of an Agent Teams session, derived from Claude Code's
@@ -86,6 +91,7 @@ export interface CardState {
   sessionCostUsd?: number;
   /** Background tasks (e.g. Monitor) the agent has spawned during this turn. */
   backgroundEvents?: BackgroundEvent[];
+  hasRunningBackgroundWork?: boolean;
   /** Active /goal condition for this session, if any. Mirrored locally so the card can show "🎯 Goal" badge across turns. */
   goalCondition?: string;
   /** Snapshot of the active Agent Team (teammates + tasks), if any. */

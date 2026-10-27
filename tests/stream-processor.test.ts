@@ -217,7 +217,7 @@ describe('StreamProcessor background task events', () => {
       description: 'Watching CI for PR #215',
     } as unknown as SDKMessage));
     expect(state.backgroundEvents).toEqual([
-      { taskId: 't-1', description: 'Watching CI for PR #215', status: 'running', lastEvent: undefined },
+      { kind: 'work', taskId: 't-1', description: 'Watching CI for PR #215', status: 'running', lastEvent: undefined },
     ]);
   });
 
@@ -231,7 +231,7 @@ describe('StreamProcessor background task events', () => {
       description: 'Watching CI', summary: 'check (20) running',
     } as unknown as SDKMessage));
     expect(state.backgroundEvents?.[0]).toEqual({
-      taskId: 't-1', description: 'Watching CI', status: 'running', lastEvent: 'check (20) running',
+      kind: 'work', taskId: 't-1', description: 'Watching CI', status: 'running', lastEvent: 'check (20) running',
     });
   });
 
@@ -299,7 +299,7 @@ describe('StreamProcessor background task events', () => {
       type: 'task_notification', session_id: 'codex-sess', result: 'rate limited',
     } as unknown as SDKMessage));
     expect(state.backgroundEvents?.[0]).toMatchObject({
-      taskId: 'codex-sess', lastEvent: 'rate limited',
+      kind: 'information', taskId: 'codex-sess', lastEvent: 'rate limited',
     });
   });
 
